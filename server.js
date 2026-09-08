@@ -1688,6 +1688,172 @@ app.post('/api/hazards/upload-excel', authenticateToken, requireRole('super_admi
   }
 });
 
+// ── POST /api/permits/upload-excel — استيراد تصاريح عمل قديمة بالجملة من ملف إكسل
+// (super_admin & hse_admin فقط). يقبل نفس الأعمدة المستخدمة في سجلات PTW القديمة:
+// النوع / القسم / الوردية / رقم التصريح / الوصف / التاريخ / مسئول التنفيذ / مسئول السلامة /
+// مدير المنطقة / الموقع — بأي ترتيب وبأسماء أعمدة عربي أو إنجليزي.
+app.post('/api/permits/upload-excel', authenticateToken, requireRole('super_admin', 'hse_admin'), async (req, res) => {
+  try {
+    const { base64Data } = req.body;
+    if (!base64Data) {
+      return res.status(400).json({ success: false, message: 'No file data provided' });
+    }
+
+    const buffer = Buffer.from(base64Data, 'base64');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer);
+
+    // فهرسة الموظفين بالاسم عشان نربط كل تصريح قديم بصاحبه تلقائيًا
+    const employees = readEmployees();
+    const nameToEmp = new Map();
+    employees.forEach(e => {
+      const n = String(e.name || '').trim();
+      if (n) nameToEmp.set(n, e);
+    });
+
+    const TYPE_MAP = [
+      { key: 'hot',    words: ['ساخن', 'hot'] },
+      { key: 'lockout', words: ['فصل', 'عزل', 'lockout'] },
+      { key: 'height', words: ['ارتفاع', 'height'] },
+      { key: 'excavation', words: ['حفر', 'excavation'] },
+      { key: 'confined', words: ['اماكن مغلقة', 'أماكن مغلقة', 'confined'] },
+      { key: 'lifting', words: ['رفع', 'lifting'] },
+      { key: 'general', words: ['عام', 'general'] }
+    ];
+    function mapTypeKey(label) {
+      const l = String(label || '').trim();
+      for (const t of TYPE_MAP) {
+        if (t.words.some(w => l.includes(w))) return t.key;
+      }
+      return 'general';
+    }
+
+    const importedPermits = [];
+    let skippedRows = 0;
+
+    for (const sheet of workbook.worksheets) {
+      let headerRowNumber = 0;
+      let colMap = {};
+
+      sheet.eachRow((row, rowNum) => {
+        if (headerRowNumber || rowNum > 6) return;
+        const vals = row.values.map(v => (v == null ? '' : String(v).trim()));
+        const joinedLower = vals.join(' ').toLowerCase();
+        const hasPtwNo = joinedLower.includes('ptw') || vals.some(v => v.includes('تصريح'));
+        const hasDate  = joinedLower.includes('date') || vals.some(v => v.includes('تاريخ'));
+        if (!hasPtwNo || !hasDate) return;
+
+        headerRowNumber = rowNum;
+        vals.forEach((v, idx) => {
+          if (!v) return;
+          const val = v.toLowerCase();
+          if (!colMap.ptwNo && (val.includes('ptw no') || val.includes('رقم التصريح') || val.includes('رقم تصريح'))) colMap.ptwNo = idx;
+          else if (!colMap.type && (val.includes('type') || val.includes('نوع'))) colMap.type = idx;
+          else if (!colMap.dept && (val.includes('department') || val.includes('قسم'))) colMap.dept = idx;
+          else if (!colMap.shift && (val.includes('shift') || val.includes('وردية'))) colMap.shift = idx;
+          else if (!colMap.desc && (val.includes('detail') || val.includes('description') || val.includes('وصف'))) colMap.desc = idx;
+          else if (!colMap.date && (val.includes('date') || val.includes('تاريخ'))) colMap.date = idx;
+          else if (!colMap.executive && (val.includes('executive') || val.includes('مسئول التنفيذ') || val.includes('مسؤول التنفيذ'))) colMap.executive = idx;
+          else if (!colMap.safety && (val.includes('safety') || val.includes('مسئول السلامة') || val.includes('مسؤول السلامة'))) colMap.safety = idx;
+          else if (!colMap.areaManager && (val.includes('area manager') || val.includes('مدير المنطقة'))) colMap.areaManager = idx;
+          else if (!colMap.location && (val.includes('location') || val.includes('موقع'))) colMap.location = idx;
+        });
+      });
+
+      if (!headerRowNumber) continue; // مفيش هيدر في الشيت ده، تخطاه
+
+      sheet.eachRow((row, rowNum) => {
+        if (rowNum <= headerRowNumber) return;
+        const vals = row.values;
+        const ptwNo = String(vals[colMap.ptwNo] || '').trim();
+        const desc  = String(vals[colMap.desc]  || '').trim();
+        if (!ptwNo && !desc) { skippedRows++; return; } // صف فاضي
+
+        let d = null;
+        const dateVal = vals[colMap.date];
+        if (dateVal instanceof Date) {
+          d = dateVal;
+        } else if (typeof dateVal === 'number') {
+          d = new Date(Math.round((dateVal - 25569) * 86400 * 1000));
+        } else if (typeof dateVal === 'string') {
+          const parsed = new Date(dateVal.trim());
+          if (!isNaN(parsed.getTime())) d = parsed;
+        }
+        if (!d || isNaN(d.getTime())) d = new Date();
+        const dateStr = d.toISOString().split('T')[0];
+
+        const typeLabelRaw   = String(vals[colMap.type] || 'عام').trim();
+        const executiveName  = String(vals[colMap.executive]   || '').trim();
+        const safetyName     = String(vals[colMap.safety]      || '').trim();
+        const areaManagerName= String(vals[colMap.areaManager] || '').trim();
+        const workerName     = executiveName || safetyName || 'غير محدد';
+        const matchedEmp     = nameToEmp.get(executiveName) || nameToEmp.get(safetyName) || null;
+
+        importedPermits.push({
+          id:               'OLD-' + Date.now() + '-' + Math.floor(Math.random() * 1000) + '-' + rowNum,
+          typeKey:          mapTypeKey(typeLabelRaw),
+          typeLabel:        typeLabelRaw,
+          typeFullLabel:    typeLabelRaw,
+          department:       String(vals[colMap.dept] || '').trim(),
+          shift:            String(vals[colMap.shift] || '').trim(),
+          date:             dateStr,
+          previousPermitNo: ptwNo,
+          timeFrom:         '',
+          timeTo:           '',
+          workerName:       workerName,
+          requesterKind:    'موظف',
+          requesterPhone:   '',
+          employeeId:       matchedEmp ? String(matchedEmp.empCode || matchedEmp.code || '') : '',
+          description:      desc,
+          location:         String(vals[colMap.location] || '').trim(),
+          equipment:        '',
+          tools:            [],
+          workersNames:     '',
+          checklist:        [],
+          checklistNote:    '',
+          risks:            [],
+          status:           'approved',
+          reviewedBy:       safetyName || 'استيراد سجل قديم',
+          reviewedAt:       dateStr,
+          reviewNote:       'مستورد من سجل تصاريح عمل قديم (Excel)',
+          closure:          null,
+          areaHeadReviewedBy:  executiveName,
+          areaHeadReviewedAt:  dateStr,
+          safetyOfficerName:   safetyName,
+          areaManagerName:     areaManagerName,
+          isImportedLegacy:    true,
+          deletedBy: { areaAdmin: false, safetyAdmin: false, superAdmin: false, worker: false },
+          createdAt: dateStr
+        });
+      });
+    }
+
+    if (importedPermits.length === 0) {
+      return res.status(400).json({ success: false, message: 'لم يتم العثور على تصاريح صالحة في الملف — تأكد من وجود أعمدة رقم التصريح والتاريخ' });
+    }
+
+    const storage = readStorage();
+    let existingPermits = [];
+    if (storage['work-permits']) {
+      try { existingPermits = JSON.parse(storage['work-permits']); } catch { existingPermits = []; }
+    }
+    const merged = [...existingPermits, ...importedPermits];
+    storage['work-permits'] = JSON.stringify(merged);
+
+    const matchedCount = importedPermits.filter(p => p.employeeId).length;
+    console.log(`[permits/upload-excel] استيراد ${importedPermits.length} تصريح قديم — اتربطوا بموظفين: ${matchedCount} — صفوف اتجاهلت: ${skippedRows}`);
+
+    if (writeStorage(storage)) {
+      res.json({ success: true, count: importedPermits.length, matched: matchedCount, skipped: skippedRows });
+    } else {
+      res.status(500).json({ success: false, message: 'Failed to save permit data' });
+    }
+  } catch (error) {
+    console.error('Error parsing Permits Excel:', error);
+    res.status(500).json({ success: false, message: 'Invalid Excel file or parsing error' });
+  }
+});
+
 app.post('/api/hazards', submitLimiter, async (req, res) => {
   const payload = req.body;
   console.log('[POST /api/hazards] Received hazard report from:', payload.reporterName || 'Unknown');
@@ -1802,7 +1968,11 @@ app.get('/api/hazards/employee-stats', authenticateToken, requireRole('super_adm
   
   const stats = employees.map(emp => {
     // Only count non-deleted hazards
-    const empHazards = hazards.filter(h => h.reporterId === emp.code && h.deleted !== true);
+    // FIX (2026-09): hazard reports store the employee code under `empCode`, never
+    // under `reporterId` (that field is never set anywhere in the codebase — this
+    // comparison always evaluated to false, so every employee's count was stuck at 0).
+    const empCodeNorm = normalizeEmpCode(emp.code || emp.empCode || '');
+    const empHazards = hazards.filter(h => normalizeEmpCode(h.empCode) === empCodeNorm && h.deleted !== true);
     return {
       code: emp.code,
       name: emp.name,

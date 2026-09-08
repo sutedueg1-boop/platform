@@ -1,0 +1,54 @@
+[
+  {
+    "id": "NT-1788852917759-353",
+    "targetRole": null,
+    "targetEmpCode": "271",
+    "targetGroup": null,
+    "type": "penalty",
+    "title": "جزاء جديد",
+    "message": "تم تسجيل جزاء عليك بتاريخ 2026-09-01: اختبار جزاء تجريبي",
+    "link": "penaltiesWorker",
+    "targetId": null,
+    "readBy": [],
+    "createdAt": "2026-09-08T07:35:17.759Z"
+  },
+  {
+    "id": "NT-1788856684729-885",
+    "targetRole": "admin",
+    "targetEmpCode": null,
+    "targetGroup": null,
+    "type": "hazard",
+    "title": "بلاغ خطورة جديد 🚨",
+    "message": "بلاغ خطورة جديد في صش - لسق",
+    "link": "tabSupHazard",
+    "targetId": null,
+    "readBy": [],
+    "createdAt": "2026-09-08T08:38:04.730Z"
+  },
+  {
+    "id": "NT-1788857464318-653",
+    "targetRole": "dept_admin",
+    "targetEmpCode": null,
+    "targetGroup": null,
+    "type": "permit",
+    "title": "طلب جديد 📋",
+    "message": "مقدم من احمد هانى صبحى عبدالحفيظ نوع عام في all factory",
+    "link": "tabPermits",
+    "targetId": null,
+    "readBy": [],
+    "createdAt": "2026-09-08T08:51:04.318Z"
+  },
+  {
+    "id": "NT-1788857464323-989",
+    "targetRole": null,
+    "targetEmpCode": "66499",
+    "targetGroup": null,
+    "type": "permit",
+    "title": "استلام طلب طلب ✅",
+    "message": "تم استلام طلب طلبك بنجاح وهو قيد المراجعة",
+    "link": "tabMyHistory",
+    "targetId": null,
+    "readBy": [],
+    "createdAt": "2026-09-08T08:51:04.323Z"
+  }
+]

@@ -4296,6 +4296,42 @@ async function uploadHazardsExcel(event) {
   };
   reader.readAsDataURL(file);
 }
+
+async function uploadPermitsExcel(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const dataUrl = e.target.result;
+    const base64Data = dataUrl.split(',')[1];
+
+    showToast('جاري رفع سجل التصاريح القديمة واستيراد البيانات...', 'info');
+
+    try {
+      const res = await authFetch('/api/permits/upload-excel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64Data })
+      });
+      const json = await res.json();
+      if (json.success) {
+        showToast(`تم استيراد ${json.count} تصريح قديم بنجاح! (اترّبط بموظف: ${json.matched ?? '?'})`, 'success');
+        renderSupervisor(); // refresh the permits list
+      } else {
+        showToast(json.message || 'حدث خطأ أثناء الرفع', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('خطأ في الاتصال بالخادم', 'error');
+    }
+
+    // Reset file input
+    event.target.value = '';
+  };
+  reader.readAsDataURL(file);
+}
+
 window.exportHazardsExcel = function() {
   const dataToExport = window._currentFilteredHazards || [];
   if (dataToExport.length === 0) {

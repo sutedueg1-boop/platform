@@ -1,1 +1,0 @@
-["5097: if (window._notifPollTimer) {", "5098: clearInterval(window._notifPollTimer);", "5099: window._notifPollTimer = null;"]
