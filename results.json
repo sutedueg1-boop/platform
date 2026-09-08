@@ -1,0 +1,1 @@
+["4426: if (typeof renderAdminLiveSessions === 'function') {", "4430: renderAdminLiveSessions(trainings);", "4442: function renderAdminLiveSessions(trainings) {"]

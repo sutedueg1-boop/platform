@@ -1,0 +1,15 @@
+[
+  {
+    "id": "NT-1788852917759-353",
+    "targetRole": null,
+    "targetEmpCode": "271",
+    "targetGroup": null,
+    "type": "penalty",
+    "title": "جزاء جديد",
+    "message": "تم تسجيل جزاء عليك بتاريخ 2026-09-01: اختبار جزاء تجريبي",
+    "link": "penaltiesWorker",
+    "targetId": null,
+    "readBy": [],
+    "createdAt": "2026-09-08T07:35:17.759Z"
+  }
+]
