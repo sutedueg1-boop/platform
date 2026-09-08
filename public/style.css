@@ -609,6 +609,33 @@ body {
   font-weight: 700;
 }
 
+/* كارت الجزاءات — تكبير الخط عشان يبقى أوضح وأقرب لحجم الكلام التاني في الصفحة */
+.penalty-card.sup-card {
+  padding: 18px 20px;
+}
+
+.penalty-card .hz-status-badge {
+  font-size: 15px;
+  padding: 6px 14px;
+}
+
+.penalty-card .tnum {
+  font-size: 13.5px;
+}
+
+.penalty-card .meta-grid {
+  font-size: 16px;
+  gap: 10px 14px;
+}
+
+.penalty-card .meta-grid div span {
+  font-size: 14px;
+}
+
+.penalty-card > div[style*="font-size:14px"] {
+  font-size: 15.5px !important;
+}
+
 .desc {
   font-size: 13.5px;
   margin: 10px 0;

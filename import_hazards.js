@@ -48,7 +48,11 @@ async function importHazards() {
     }
     const dateStr = d.toISOString();
 
-    const isClosed = statusText.includes('تم') || statusText.includes('closed') || statusText.includes('مغلق');
+    // ملحوظة: "لم يتم" نفسها بتحتوي على "تم" جواها (لم + يتم)، فلازم نتأكد من "لم يتم" الأول
+    // قبل ما نفحص "تم"، وإلا كل الصفوف هتتقفل غلط
+    const normalizedStatus = statusText.replace(/\s+/g, '');
+    const isNotDone = normalizedStatus.includes('لميتم') || normalizedStatus.includes('لمتتم') || normalizedStatus.includes('open') || normalizedStatus.includes('مفتوح');
+    const isClosed = !isNotDone && (normalizedStatus.includes('تم') || normalizedStatus.includes('closed') || normalizedStatus.includes('مغلق'));
 
     importedHazards.push({
       id: 'HAZ-' + Date.now() + '-' + Math.floor(Math.random() * 1000) + '-' + rowNumber,

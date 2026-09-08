@@ -4281,7 +4281,7 @@ async function uploadHazardsExcel(event) {
       });
       const json = await res.json();
       if (json.success) {
-        showToast(`تم استيراد ${json.count} بلاغ بنجاح!`, 'success');
+        showToast(`تم استيراد ${json.count} بلاغ بنجاح! (مغلق: ${json.closed ?? '?'} / مفتوح: ${json.open ?? '?'})`, 'success');
         renderSupHazard(true); // refresh the list
       } else {
         showToast(json.message || 'حدث خطأ أثناء الرفع', 'error');
@@ -6446,7 +6446,7 @@ async function renderPenaltiesAdmin() {
     }
 
     listEl.innerHTML = penaltiesAdminCache.map(p => `
-      <div class="sup-card" style="margin-bottom:12px;border-right:4px solid #7c3aed;">
+      <div class="sup-card penalty-card" style="margin-bottom:12px;border-right:4px solid #7c3aed;">
         <div class="sup-top">
           <div>
             <div class="hz-status-badge hz-high">⚖️ ${escapeHtml(p.empName || p.empCode || '')}</div>
@@ -6455,6 +6455,7 @@ async function renderPenaltiesAdmin() {
         </div>
         <div class="meta-grid">
           <div><span>الكود الوظيفي</span>${escapeHtml(p.empCode || '')}</div>
+          <div><span>الوظيفة</span>${escapeHtml(p.jobTitle || '—')}</div>
           <div><span>القسم</span>${escapeHtml(p.department || '—')}</div>
           <div><span>مشرف السيفتي</span>${escapeHtml(p.issuedBy || '—')}</div>
         </div>

@@ -1638,7 +1638,12 @@ app.post('/api/hazards/upload-excel', authenticateToken, requireRole('super_admi
       if (!d || isNaN(d.getTime())) d = new Date(); // Fallback to now
       const dateStr = d.toISOString();
 
-      const isClosed = statusText.includes('تم') || statusText.includes('closed') || statusText.includes('مغلق');
+      // ملحوظة: لازم نتأكد إن العمود مكتوب فيه "لم يتم" الأول، لأن كلمة "لم يتم" نفسها
+      // بتحتوي على "تم" جوّاها (لم + يتم)، فلو دورنا على "تم" بس هيقفل كل البلاغات غلط.
+      const normalizedStatus = statusText.replace(/\s+/g, '');
+      const isNotDone = normalizedStatus.includes('لميتم') || normalizedStatus.includes('لمتتم') || normalizedStatus.includes('لميحدث') || normalizedStatus.includes('open') || normalizedStatus.includes('مفتوح');
+      const isDone = !isNotDone && (normalizedStatus.includes('تم') || normalizedStatus.includes('closed') || normalizedStatus.includes('مغلق'));
+      const isClosed = isDone;
 
       importedHazards.push({
         id: 'HAZ-' + Date.now() + '-' + Math.floor(Math.random() * 1000) + '-' + rowNumber,
@@ -1668,9 +1673,12 @@ app.post('/api/hazards/upload-excel', authenticateToken, requireRole('super_admi
 
     const hazards = readHazards();
     const merged = [...hazards, ...importedHazards];
-    
+    const closedCount = importedHazards.filter(h => h.status === 'closed').length;
+    const openCount = importedHazards.filter(h => h.status === 'open').length;
+    console.log(`[hazards/upload-excel] استيراد ${importedHazards.length} بلاغ — مغلق: ${closedCount} / مفتوح: ${openCount}`);
+
     if (writeHazards(merged)) {
-      res.json({ success: true, count: importedHazards.length });
+      res.json({ success: true, count: importedHazards.length, closed: closedCount, open: openCount });
     } else {
       res.status(500).json({ success: false, message: 'Failed to save hazard data' });
     }
@@ -4284,6 +4292,32 @@ function findEmployeeByCodeOrName(code, name) {
   return null;
 }
 
+// يحدّث الوظيفة (jobTitle) والقسم لكل جزاء بأحدث بيانات من شيت العمال الرئيسي (employees)
+// بدل ما نعتمد على القيمة اللي اتخزنت وقت إنشاء الجزاء ولو اتغيرت بعدين في شيت الموظفين
+// بيدور بالكود الوظيفي الأول، ولو مفيش كود أو مالقاش تطابق بيدور بالاسم كـ fallback
+function enrichPenaltiesWithLiveEmployeeData(penalties) {
+  const employees = readEmployees();
+  const byCode = new Map();
+  const byName = new Map();
+  employees.forEach(e => {
+    const nCode = normalizeEmpCode(e.empCode);
+    if (nCode) byCode.set(nCode, e);
+    const nName = String(e.name || '').trim();
+    if (nName) byName.set(nName, e);
+  });
+
+  return penalties.map(p => {
+    let emp = byCode.get(normalizeEmpCode(p.empCode));
+    if (!emp) emp = byName.get(String(p.empName || '').trim());
+    if (!emp) return p;
+    return {
+      ...p,
+      jobTitle: emp.jobTitle || p.jobTitle || '',
+      department: emp.department || p.department || ''
+    };
+  });
+}
+
 // GET /api/penalties — list active + deleted penalties (scoped by department for dept/maint admins)
 app.get('/api/penalties', authenticateToken, requireRole('super_admin', 'hse_admin', 'dept_admin', 'maint_admin'), (req, res) => {
   let penalties = readPenalties();
@@ -4293,6 +4327,7 @@ app.get('/api/penalties', authenticateToken, requireRole('super_admin', 'hse_adm
   }
 
   penalties = penalties.slice().sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0));
+  penalties = enrichPenaltiesWithLiveEmployeeData(penalties);
   res.json({ penalties });
 });
 
@@ -4301,9 +4336,10 @@ app.get('/api/my-penalties/:empCode', (req, res) => {
   const code = normalizeEmpCode(req.params.empCode || '');
   if (!code) return res.status(400).json({ error: 'الكود الوظيفي مطلوب' });
 
-  const penalties = readPenalties()
+  let penalties = readPenalties()
     .filter(p => normalizeEmpCode(p.empCode) === code && p.status !== 'deleted')
     .sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0));
+  penalties = enrichPenaltiesWithLiveEmployeeData(penalties);
 
   res.json({ penalties });
 });
