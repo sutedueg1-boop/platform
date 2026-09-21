@@ -26,6 +26,7 @@ const QRCode = require('qrcode');
 const { prepareBidiText } = require('./lib/pdf-arabic');
 const chatbot = require('./lib/chatbot');
 const chatbotAnalytics = require('./lib/chatbot-analytics');
+const chatbotFollowup = require('./lib/chatbot-followup');
 const { normalizeArabic: normalizeArabicText } = require('./lib/chatbot-kb');
 const whatsapp = require('./lib/whatsapp');
 const mailer = require('./lib/mailer');
@@ -293,6 +294,14 @@ loadSmtpSettings();
 // ── First-boot-only defaults (نفس منطق "أنشئ الملف لو مش موجود" القديم) ──
 if (!trainingTopicsStore.exists()) trainingTopicsStore.write(INITIAL_TOPICS);
 
+// ── الثقة في الـ proxy (Railway/أي استضافة) ───────────────────
+// من غير السطر ده، express بيشوف IP الـ proxy بدل IP المستخدم الحقيقي،
+// فكل الناس بتتحسب **مستخدم واحد** في الـ rate limiting: يعني أي حد يغلط
+// في كلمة السر ١٥ مرة كان بيقفل تسجيل الدخول على المصنع كله، وسجل التدقيق
+// كان بيسجّل نفس الـ IP لكل الناس. رقم 1 = نثق في أول proxy بس (مش أي
+// X-Forwarded-For جاي من المستخدم نفسه). إصلاح 20 سبتمبر 2026.
+app.set('trust proxy', 1);
+
 // ── Security Headers Middleware ───────────────────────────────
 // Applied before all other routes. No external dependency needed.
 app.disable('x-powered-by');
@@ -301,6 +310,12 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // منع المواقع من استخدام كاميرا/مايك/موقع المستخدم من جوه صفحتنا
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(self), microphone=(self), payment=()');
+  // HSTS: بيتبعت بس لما الاتصال يكون مشفّر فعلاً (Railway أو HTTPS محلي) —
+  // إرساله على http عادي مالوش أي تأثير وممكن يلخبط المتصفح.
+  const isHttps = req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+  if (isHttps) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://cdn.jsdelivr.net; media-src 'self' data: blob:;"
@@ -1153,6 +1168,33 @@ async function loadEmployeesFromXlsxIfNeeded() {
  * Use on every string field before persisting to storage.
  * Does NOT double-encode — avoids the &amp; double-encoding problem.
  */
+/**
+ * checkPasswordStrength — سياسة كلمة سر واحدة لكل المنصة.
+ * قبل كده كان الشرط "٦ حروف" في مكان واحد بس، وباقي مسارات تغيير كلمة
+ * السر مكانش عليها أي شرط — يعني حد يقدر يعمل كلمة سر "1" لحسابه.
+ * بترجّع رسالة الخطأ بالعربي أو null لو الباسورد مقبولة.
+ * (مش بنفرض رموز وأرقام إجبارية عشان عمال المصنع — الطول والاختلاف عن
+ *  الكود الوظيفي هما اللي بيمنعوا التخمين فعليًا.)
+ * إضافة 20 سبتمبر 2026.
+ */
+const WEAK_PASSWORDS = new Set([
+  '12345678', '123456789', '1234567890', '123456', '111111', '000000', 'password',
+  'admin123', 'qwerty123', 'elsewedy', 'elsewedy1', '12341234', 'abcd1234', 'aaaaaaaa',
+]);
+function checkPasswordStrength(password, context = {}) {
+  const pw = String(password || '');
+  if (pw.length < 8) return 'كلمة السر لازم تكون 8 حروف أو أرقام على الأقل';
+  if (pw.length > 128) return 'كلمة السر طويلة أوي';
+  if (WEAK_PASSWORDS.has(pw.toLowerCase())) return 'كلمة السر دي معروفة وسهلة التخمين — اختار واحدة تانية';
+  if (/^(.)\1+$/.test(pw)) return 'كلمة السر مش ممكن تكون حرف واحد متكرر';
+  if (/^(?:0123456789|1234567890|9876543210)/.test(pw)) return 'كلمة السر مش ممكن تكون أرقام متسلسلة';
+  const code = String(context.empCode || '').trim();
+  const username = String(context.username || '').trim().toLowerCase();
+  if (code && pw.includes(code)) return 'ما تخليش كلمة السر فيها كودك الوظيفي — ده أول حاجة أي حد هيجربها';
+  if (username && username.length >= 4 && pw.toLowerCase().includes(username)) return 'ما تخليش كلمة السر فيها اسم المستخدم بتاعك';
+  return null;
+}
+
 function sanitizeStr(val, maxLen = 500) {
   if (val === undefined || val === null) return '';
   return String(val)
@@ -2474,7 +2516,14 @@ app.post('/api/hazards', submitLimiter, authenticateSession, async (req, res) =>
         const isPNG = base64Data.startsWith('iVBORw0KGgo');
         const isWebP = base64Data.startsWith('UklGR');
         
-        if (isJPEG || isPNG || isWebP) {
+        // حد أقصى لحجم الصورة: حد الجسم الكلي 50 ميجا، ومن غير الشرط ده
+        // أي حد يقدر يملّي الهارد بصور ضخمة. 8 ميجا كفاية جدًا لصورة خطر
+        // من الموبايل. (20 سبتمبر 2026)
+        const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+        const approxBytes = Math.floor(base64Data.length * 0.75);
+        if (approxBytes > MAX_PHOTO_BYTES) {
+          console.warn(`[Security] صورة بلاغ أكبر من الحد (${Math.round(approxBytes / 1048576)}MB) — اترفضت.`);
+        } else if (isJPEG || isPNG || isWebP) {
           const buffer = Buffer.from(base64Data, 'base64');
           // Strict filename without user input to prevent Path Traversal
           const filename = `HZ-${Date.now()}-${Math.floor(Math.random()*1000)}.jpg`;
@@ -3823,8 +3872,9 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: 'كلمة المرور الحالية والجديدة مطلوبتان' });
   }
-  if (String(newPassword).length < 8) {
-    return res.status(400).json({ error: 'كلمة المرور الجديدة يجب ألا تقل عن 8 أحرف' });
+  const pwErrChange = checkPasswordStrength(newPassword, { empCode: req.user && req.user.empCode, username: req.user && req.user.username });
+  if (pwErrChange) {
+    return res.status(400).json({ error: pwErrChange });
   }
   if (newPassword === currentPassword) {
     return res.status(400).json({ error: 'كلمة المرور الجديدة يجب أن تختلف عن الحالية' });
@@ -3884,8 +3934,11 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
 // بدلها) عشان محدش يقدر "يسرق" حساب شخص عمل كلمة سره قبل كده.
 app.post('/api/auth/set-personal-password', authenticateToken, async (req, res) => {
   const { newPassword } = req.body || {};
-  if (!newPassword || String(newPassword).length < 6) {
-    return res.status(400).json({ error: 'كلمة المرور يجب ألا تقل عن 6 أحرف' });
+  const pwErrSelf = !newPassword
+    ? 'كلمة السر مطلوبة'
+    : checkPasswordStrength(newPassword, { empCode: req.user && req.user.empCode, username: req.user && req.user.username });
+  if (pwErrSelf) {
+    return res.status(400).json({ error: pwErrSelf });
   }
   const profileKey = normalizeEmpCode(req.user.empCode || '');
   if (!profileKey) {
@@ -3907,6 +3960,11 @@ app.post('/api/auth/set-personal-password', authenticateToken, async (req, res) 
     if (!users[idx].memberCredentials) users[idx].memberCredentials = {};
     if (users[idx].memberCredentials[profileKey]) {
       result = { status: 409, body: { error: 'عندك كلمة سر شخصية بالفعل على الحساب ده — استخدم "تغيير كلمة المرور"' } };
+      return;
+    }
+    const pwErrSetup = checkPasswordStrength(newPassword, { empCode: profileKey, username: users[idx].username });
+    if (pwErrSetup) {
+      result = { status: 400, body: { error: pwErrSetup } };
       return;
     }
     users[idx].memberCredentials[profileKey] = {
@@ -4033,8 +4091,9 @@ app.post('/api/users',
     if (role === 'dept_admin' && !req.body.department) {
       return res.status(400).json({ error: 'يجب تحديد القسم لرئيس القسم' });
     }
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' });
+    const pwErr = checkPasswordStrength(password, { username });
+    if (pwErr) {
+      return res.status(400).json({ error: pwErr });
     }
 
     let result;
@@ -4175,8 +4234,9 @@ app.put('/api/users/:id',
       return res.status(400).json({ error: 'الاسم واسم المستخدم والدور مطلوبة' });
     }
 
-    if (newPassword && newPassword.length < 6) {
-      return res.status(400).json({ error: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' });
+    const pwErrEdit = newPassword ? checkPasswordStrength(newPassword, { username }) : null;
+    if (pwErrEdit) {
+      return res.status(400).json({ error: pwErrEdit });
     }
 
     let result;
@@ -7303,7 +7363,10 @@ app.post('/api/admin/backup/import', authenticateToken, requireRole('super_admin
       result = { status: 200, body: { success: true, ...summary } };
     } catch (err) {
       console.error('[Backup] Import failed:', err);
-      result = { status: 500, body: { error: err.message || 'فشل استرجاع النسخة الاحتياطية' } };
+      // الخطأ التفصيلي بيتسجّل عندنا بس — المستخدم بياخد رسالة عامة عشان
+      // ما نسرّبش مسارات ملفات أو تفاصيل داخلية في الرد. (20 سبتمبر 2026)
+      console.error('[backup/import] فشل الاستيراد:', err);
+      result = { status: 500, body: { error: 'فشل استرجاع النسخة الاحتياطية — راجع سجل السيرفر للتفاصيل' } };
     }
   });
   res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
@@ -9582,16 +9645,59 @@ function chatbotContextFromBody(body) {
   const c = body && body.context;
   if (!c || typeof c !== 'object') return null;
   const lastEntity = CHATBOT_TOPICS.includes(c.lastEntity) ? c.lastEntity : null;
-  if (!lastEntity) return null;
   const depts = Array.isArray(c.depts) ? c.depts.slice(0, 5).map(d => sanitizeStr(d, 60)).filter(Boolean) : [];
-  return { lastEntity, depts };
+  // السؤال المعلّق عن خانة ناقصة في النموذج (بييجي من الواجهة ويترجع لها)
+  // — بيتفلتر لقيم معروفة بس قبل ما يتلمس. إضافة 20 سبتمبر 2026.
+  const pending = chatbotFollowup.sanitizePending(c.pending);
+  if (!lastEntity && !pending) return null;
+  return { lastEntity, depts, pending };
 }
 
-app.post('/api/chatbot/message', chatbotLimiter, authenticateSession, (req, res) => {
+// إجراءات الواجهة المسموح بيها للشات بوت — قايمة بيضا مقفولة. حتى لو أي
+// طبقة رجّعت إجراء غريب، مش هيعدي غير النوع والحقول دي بالظبط.
+const CHATBOT_ACTION_TABS = [
+  'dashboard', 'worker', 'myhistory', 'hazardWorker', 'myhazards', 'trainingWorker',
+  'drillWorker', 'penaltiesWorker', 'sup', 'supHazard', 'trainingAdmin', 'drillAdmin',
+  'penaltiesAdmin', 'employees', 'inspections', 'users', 'auditlog', 'executive',
+];
+const CHATBOT_ACTION_PERMIT_TYPES = ['general', 'height', 'confined', 'excavation', 'lifting', 'hot', 'loto'];
+// الحقول اللي الشات بوت مسموحله يملاها، وأقصى طول لكل واحد.
+// تصريح: desc/workers/location/equip — بلاغ: dept/area/injury/solution/likelihood/severity
+const CHATBOT_FILL_LIMITS = {
+  desc: 600, workers: 600, location: 60, equip: 120,
+  dept: 80, area: 120, injury: 200, solution: 300,
+  likelihood: 2, severity: 2,
+};
+
+function sanitizeChatbotAction(action) {
+  if (!action || typeof action !== 'object') return null;
+  // 'navigate' = افتح التابة واملاها | 'fill' = املا خانة في نموذج مفتوح
+  // أصلاً (إجابة على سؤال معلّق) من غير ما تنقل المستخدم من مكانه.
+  if (action.type !== 'navigate' && action.type !== 'fill') return null;
+  if (!CHATBOT_ACTION_TABS.includes(action.tab)) return null;
+  const out = { type: action.type, tab: action.tab };
+  if (CHATBOT_ACTION_PERMIT_TYPES.includes(action.permitType)) out.permitType = action.permitType;
+  if (action.fill && typeof action.fill === 'object') {
+    const fill = {};
+    for (const [key, limit] of Object.entries(CHATBOT_FILL_LIMITS)) {
+      const val = sanitizeStr(action.fill[key] || '', limit);
+      if (!val) continue;
+      if (key === 'likelihood' && !['1', '2', '3', '4', '5'].includes(val)) continue;
+      if (key === 'severity' && !['A', 'B', 'C', 'D', 'E'].includes(val)) continue;
+      fill[key] = val;
+    }
+    if (Object.keys(fill).length) out.fill = fill;
+  }
+  return out;
+}
+
+app.post('/api/chatbot/message', chatbotLimiter, authenticateSession, async (req, res) => {
   const text = sanitizeStr((req.body && req.body.text) || '', 500);
   if (!text) return res.status(400).json({ error: 'الرسالة فارغة' });
   try {
-    const result = chatbot.handleMessage({
+    // async من 20 سبتمبر 2026: آخر طبقة في الشات بوت ممكن تنادي Claude
+    // (لو ANTHROPIC_API_KEY متظبط). كل الطبقات المحلية لسه متزامنة وسريعة.
+    const result = await chatbot.handleMessage({
       text,
       user: chatbotUserFromSession(req),
       data: chatbotData(),
@@ -9602,6 +9708,12 @@ app.post('/api/chatbot/message', chatbotLimiter, authenticateSession, (req, res)
       source: result.source || null,
       suggestions: (result.suggestions || []).slice(0, 4),
       topic: result.topic ? { lastEntity: result.topic.entity, depts: result.topic.depts || [] } : null,
+      // إجراء الواجهة (فتح تابة / تجهيز نموذج) — إضافة 20 سبتمبر 2026.
+      // بيتبني في السيرفر (lib/chatbot-nav.js) حسب صلاحية صاحب الجلسة،
+      // والواجهة بتنفّذه عبر switchTab اللي فيه حارس صلاحيات تاني.
+      action: sanitizeChatbotAction(result.action),
+      // السؤال المعلّق عن خانة ناقصة — الواجهة بترجّعه مع الرسالة الجاية
+      followup: chatbotFollowup.sanitizePending(result.followup),
     });
   } catch (err) {
     console.error('[chatbot] خطأ غير متوقع:', err);
@@ -9662,7 +9774,7 @@ async function handleWhatsAppTextMessage(incoming) {
     ? { role: admin.role, username: admin.username, name: admin.name, department: admin.department || '', empCode: '' }
     : { role: 'guest' };
   try {
-    const result = chatbot.handleMessage({
+    const result = await chatbot.handleMessage({
       text: incoming.text,
       user,
       data: admin ? chatbotData() : {},
@@ -9790,5 +9902,55 @@ app.listen(PORT, () => {
   console.log(`🚀 Work Permits Server running on http://localhost:${PORT}`);
   console.log(`🔒 JWT auth: ENABLED | bcrypt rounds: ${BCRYPT_ROUNDS}`);
 });
+
+// ── HTTPS اختياري لشبكة المصنع الداخلية ───────────────────────
+// ليه؟ المتصفحات بتمنع المايك والكاميرا والإشعارات على أي عنوان http
+// غير localhost. يعني العامل اللي بيفتح المنصة من موبايله على
+// http://192.168.x.x مش هيقدر يستخدم المايك في الشات بوت أبدًا.
+// التشغيل: حط ENABLE_HTTPS=true في .env (والمنفذ HTTPS_PORT لو حبيت).
+// الشهادة self-signed بتتولّد مرة واحدة وتتخزن في data/ssl/ — المتصفح
+// هيحذّر أول مرة ("الاتصال غير آمن") وده طبيعي لشهادة داخلية، اضغط
+// "متابعة" مرة واحدة على كل جهاز. على Railway مش محتاج ده لأن HTTPS
+// بيتعمل على مستوى الاستضافة. إضافة 20 سبتمبر 2026.
+if (String(process.env.ENABLE_HTTPS || '').toLowerCase() === 'true') {
+  // ملحوظة: selfsigned من الإصدار 5 بقت **async** (بترجّع Promise) — النسخة
+  // القديمة من الكود كانت بتقراها كأنها متزامنة فتطلع "undefined".
+  (async () => {
+    try {
+      const https = require('https');
+      const selfsigned = require('selfsigned');
+      const SSL_DIR = path.join(DATA_DIR, 'ssl');
+      const keyPath = path.join(SSL_DIR, 'server.key');
+      const certPath = path.join(SSL_DIR, 'server.crt');
+      if (!fs.existsSync(SSL_DIR)) fs.mkdirSync(SSL_DIR, { recursive: true });
+
+      let key, cert;
+      if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+        key = fs.readFileSync(keyPath, 'utf8');
+        cert = fs.readFileSync(certPath, 'utf8');
+      } else {
+        const pems = await selfsigned.generate(
+          [{ name: 'commonName', value: 'hse-platform.local' }],
+          { days: 3650, keySize: 2048, algorithm: 'sha256' }
+        );
+        key = pems.private;
+        cert = pems.cert;
+        if (!key || !cert) throw new Error('توليد الشهادة رجّع فاضي');
+        fs.writeFileSync(keyPath, key, 'utf8');
+        fs.writeFileSync(certPath, cert, 'utf8');
+        console.log('🔐 اتولّدت شهادة داخلية جديدة في data/ssl/ (صالحة 10 سنين)');
+      }
+
+      const httpsPort = Number(process.env.HTTPS_PORT || 3443);
+      https.createServer({ key, cert }, app).listen(httpsPort, () => {
+        console.log(`🔐 HTTPS شغّال كمان على https://localhost:${httpsPort}`);
+        console.log('   من موبايلات المصنع: https://<IP-الجهاز>:' + httpsPort + ' — المتصفح هيحذّر أول مرة (شهادة داخلية) اضغط "متابعة".');
+        console.log('   ودي اللي بتخلي المايك والإشعارات يشتغلوا على الشبكة الداخلية.');
+      });
+    } catch (err) {
+      console.error('⚠️ فشل تشغيل HTTPS (السيرفر شغال عادي على http):', err.message);
+    }
+  })();
+}
 
 module.exports = app;

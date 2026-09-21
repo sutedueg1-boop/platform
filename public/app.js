@@ -918,238 +918,11 @@ const HSE_CHECKLIST = {
   }
 };
 
-// ============================================================
-// 🎤 بلاغ/طلب صوتي — إضافة 15 سبتمبر 2026 (بطلب بشمهندس أحمد)
-// ============================================================
-// الفكرة: العامل بيحكي هيعمل إيه (تصريح شغل ولا بلاغ خطورة) بصوته،
-// والنظام يحدد النوع المناسب ويوديه للتبويب الصح مع تعبئة اللي يقدر
-// يستنتجه (الوصف، نوع التصريح، مكان العمل لو اتقال). ده تصنيف محلي
-// بكلمات مفتاحية — مش ذكاء اصطناعي حقيقي (بطلب بشمهندس أحمد: من غير
-// أي مفتاح API خارجي أو تكلفة) — فمش هيفهم كل صياغة ممكنة، وده ليه حد:
-// لو مش متأكد، بيسأل العامل يختار بنفسه بدل ما يخمّن غلط في حاجة
-// حساسة زي بلاغ خطورة. الوصف اللي بيتقال بيتحط كنص في خانة الوصف،
-// والعامل لازم يراجعه ويكمل باقي الحقول (قائمة التحقق، تقييم المخاطر
-// للتصاريح) ويبعت بنفسه — مفيش إرسال تلقائي خالص.
-//
-// دعم التسجيل الصوتي نفسه معتمد على Web Speech API المدمجة في المتصفح
-// (مجانية، بدون مفتاح API) — بتشتغل كويس على Chrome/Edge وأندرويد، لكن
-// مش مدعومة على Safari/آيفون. لو مش مدعومة، النافذة بترجع تلقائيًا
-// لخانة كتابة عادية تستخدم نفس منطق التصنيف والتوجيه.
-
-const VOICE_PERMIT_TYPE_HINTS = {
-  hot: ['شغل ساخن', 'لحام', 'لحيم', 'صاروخ قطع', 'قطع بالصاروخ', 'شغل بالنار', 'هلحم'],
-  height: ['ارتفاع', 'سقالة', 'طلوع فوق', 'شغل فوق', 'سلم طويل', 'اشتغل فوق'],
-  confined: ['مكان مغلق', 'اماكن مغلقة', 'خزان', 'تنك', 'غرفة مغلقة', 'مساحة ضيقة', 'دخول خزان'],
-  excavation: ['حفر', 'حفرة', 'خندق', 'هحفر'],
-  lifting: ['رفع حمل', 'ونش', 'رافعة', 'كرين', 'هرفع', 'رفع احمال'],
-  loto: ['عزل كهربا', 'فصل التيار', 'قفل الطاقة', 'عزل الطاقة', 'فصل وعزل', 'لوتو'],
-};
-const VOICE_PERMIT_INTENT_WORDS = ['تصريح', 'طلب عمل', 'عايز اشتغل', 'هدخل اشتغل', 'محتاج تصريح', 'اطلع تصريح', 'اعمل تصريح'];
-const VOICE_HAZARD_INTENT_WORDS = [
-  'بلاغ', 'فيه خطر', 'لاحظت خطر', 'تسريب', 'تسرب', 'حريق', 'اصابة', 'عطل خطير',
-  'خطوره', 'خطورة', 'مشكلة سلامة', 'زيت سايح', 'كهرباء مكشوفة', 'سلك عاري',
-  'دخان', 'ريحة غاز', 'شرخ', 'وقعت حاجة', 'بلغ عن', 'ابلغ عن'
-];
-// المفاتيح لازم تتطابق مع WORK_LOCATIONS فوق بالظبط.
-const VOICE_LOCATION_HINTS = {
-  'Administration': ['الإدارة', 'الادارة'],
-  'all factory': ['كل المصنع', 'المصنع كله', 'كل الأماكن'],
-  'Maintenance': ['الصيانة', 'صيانة'],
-  'outside': ['برة المصنع', 'خارج المصنع', 'برة'],
-  'Production - Master Batch': ['ماستر باتش', 'الماستر باتش'],
-  'Production - Special Compounds': ['كومباوند', 'الكومباوند', 'خامات خاصة'],
-  'Quality Control': ['الجودة', 'مراقبة الجودة', 'كواليتي', 'كونترول الجودة'],
-  'R&D': ['البحث والتطوير', 'ار اند دي'],
-  'Warehouse': ['المخزن', 'المخازن', 'المستودع'],
-};
-
-function _voiceCountMatches(text, words) {
-  let n = 0;
-  for (const w of words) if (text.includes(w)) n++;
-  return n;
-}
-
-/** يحلل نص (من الصوت أو مكتوب) ويحدد: بلاغ / تصريح / مش واضح — محليًا بالكامل. */
-function classifyVoiceReportText(rawText) {
-  const text = (rawText || '').trim();
-  const hazardScore = _voiceCountMatches(text, VOICE_HAZARD_INTENT_WORDS);
-  const permitScore = _voiceCountMatches(text, VOICE_PERMIT_INTENT_WORDS);
-
-  let permitTypeKey = null;
-  let bestTypeScore = 0;
-  for (const [key, words] of Object.entries(VOICE_PERMIT_TYPE_HINTS)) {
-    const score = _voiceCountMatches(text, words);
-    if (score > bestTypeScore) { bestTypeScore = score; permitTypeKey = key; }
-  }
-  // ذكر نوع تصريح محدد (زي "لحام") بيعتبر دليل إضافي على نية "تصريح".
-  const adjustedPermitScore = permitScore + (permitTypeKey ? bestTypeScore : 0);
-
-  let locationMatch = null;
-  for (const [loc, words] of Object.entries(VOICE_LOCATION_HINTS)) {
-    if (_voiceCountMatches(text, words) > 0) { locationMatch = loc; break; }
-  }
-
-  let kind = 'ambiguous';
-  if (adjustedPermitScore > hazardScore) kind = 'permit';
-  else if (hazardScore > adjustedPermitScore) kind = 'hazard';
-
-  return {
-    kind,
-    permitTypeKey: permitTypeKey || 'general',
-    locationMatch,
-    text
-  };
-}
-
-let _voiceReportState = { recognition: null, recording: false };
-
-function openVoiceReportModal() {
-  const supported = ('webkitSpeechRecognition' in window) || ('SpeechRecognition' in window);
-  const html = `
-    <h3 style="margin-top:0;">🎤 ${T("بلاغ أو طلب بالصوت")}</h3>
-    <p class="voice-hint">${T("احكي هتعمل إيه — تصريح شغل ولا بلاغ خطورة — وهوديك للمكان الصح. ده تصنيف تلقائي بسيط، لسه لازم تراجع وتكمل وتبعت بنفسك.")}</p>
-    ${supported ? `
-      <div class="voice-record-row">
-        <button type="button" id="voiceRecordBtn" class="voice-record-btn" onclick="toggleVoiceRecording()">🎙️ ${T("ابدأ التسجيل")}</button>
-        <span id="voiceRecordStatus" class="voice-record-status"></span>
-      </div>
-    ` : `
-      <p class="voice-unsupported-note">⚠️ ${T("التسجيل الصوتي مش مدعوم على المتصفح ده — اكتب طلبك بدل كده وهيتعامل معاه بنفس الطريقة.")}</p>
-    `}
-    <div class="app-modal-field">
-      <label>${T("النص (اتسجل أو اكتبه بنفسك)")}</label>
-      <textarea id="voiceReportText" rows="4" placeholder="${T("مثال: عايز اطلع تصريح شغل ساخن في الصيانة، أو: في تسريب زيت جنب المكينة التالتة")}"></textarea>
-    </div>
-    <div class="app-modal-error" id="voiceReportMsg"></div>
-    <div class="app-modal-actions">
-      <button class="submit-btn" type="button" onclick="processVoiceReportText()">${T("✅ كمل")}</button>
-    </div>
-  `;
-  openAppModal(html);
-}
-
-function toggleVoiceRecording() {
-  const btn = document.getElementById('voiceRecordBtn');
-  const status = document.getElementById('voiceRecordStatus');
-  if (_voiceReportState.recording) {
-    if (_voiceReportState.recognition) _voiceReportState.recognition.stop();
-    return;
-  }
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const rec = new SR();
-  rec.lang = 'ar-EG';
-  rec.interimResults = true;
-  rec.continuous = true;
-  const textEl = document.getElementById('voiceReportText');
-  let finalText = textEl.value ? textEl.value + ' ' : '';
-
-  rec.onstart = () => {
-    _voiceReportState.recording = true;
-    if (btn) { btn.textContent = T('⏹️ إيقاف التسجيل'); btn.classList.add('is-recording'); }
-    if (status) status.textContent = T('🔴 بيسمع دلوقتي...');
-  };
-  rec.onresult = (e) => {
-    let interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const chunk = e.results[i][0].transcript;
-      if (e.results[i].isFinal) finalText += chunk + ' ';
-      else interim += chunk;
-    }
-    textEl.value = (finalText + interim).trim();
-  };
-  rec.onerror = () => {
-    if (status) status.textContent = T('حصل خطأ في التسجيل، جرب تاني أو اكتب بنفسك');
-  };
-  rec.onend = () => {
-    _voiceReportState.recording = false;
-    if (btn) { btn.textContent = T('🎙️ ابدأ التسجيل'); btn.classList.remove('is-recording'); }
-    if (status) status.textContent = '';
-  };
-  _voiceReportState.recognition = rec;
-  rec.start();
-}
-
-function processVoiceReportText() {
-  const textEl = document.getElementById('voiceReportText');
-  const text = textEl ? textEl.value.trim() : '';
-  if (!text) {
-    qmShowMsg('voiceReportMsg', T('اتكلم أو اكتب حاجة الأول'), true);
-    return;
-  }
-  const result = classifyVoiceReportText(text);
-  if (result.kind === 'ambiguous') {
-    renderVoiceAmbiguousChoice(result);
-  } else {
-    renderVoiceConfirmChoice(result);
-  }
-}
-
-// بنخزّن النتيجة في متغيّر بدل ما نمررها كنص جوه onclick (لو النص المنطوق
-// فيه علامة اقتباس، ده كان بيكسر الـ HTML) — الأزرار بس بتبعت "إيه
-// الاختيار" وتقرأ الباقي من هنا.
-let _pendingVoiceResult = null;
-
-function renderVoiceConfirmChoice(result) {
-  _pendingVoiceResult = result;
-  const kindLabel = result.kind === 'permit'
-    ? `📋 ${T('طلب تصريح عمل')} (${T(PERMIT_TYPES[result.permitTypeKey].label)})`
-    : `⚠️ ${T('بلاغ خطورة')}`;
-  const otherKindLabel = result.kind === 'permit' ? T('بلاغ خطورة') : T('طلب تصريح');
-  const html = `
-    <h3 style="margin-top:0;">${T("طيب، ده اللي فهمته")}</h3>
-    <p class="voice-suggest-box">${kindLabel}</p>
-    <p class="voice-hint">${T('لو صح، دوس "كمل" وهيتفتحلك المكان الصح جاهز بالوصف. لو غلط، اختر النوع الصح بنفسك.')}</p>
-    <div class="app-modal-actions" style="justify-content:center; margin-bottom:10px;">
-      <button class="submit-btn" type="button" onclick="applyVoiceRouting('${result.kind}')">${T('✅ كمل')}</button>
-    </div>
-    <div class="voice-swap-row">
-      <button class="um-btn" type="button" onclick="applyVoiceRouting('${result.kind === 'permit' ? 'hazard' : 'permit'}')">${T('لأ، ده')} ${otherKindLabel}</button>
-    </div>
-  `;
-  openAppModal(html);
-}
-
-function renderVoiceAmbiguousChoice(result) {
-  _pendingVoiceResult = result;
-  const html = `
-    <h3 style="margin-top:0;">${T("مش متأكد ده إيه بالظبط")}</h3>
-    <p class="voice-hint">${T("اختر بنفسك عشان محدش يتلخبط:")}</p>
-    <div class="voice-choice-row">
-      <button class="submit-btn" type="button" onclick="applyVoiceRouting('permit')">📋 ${T('ده طلب تصريح')}</button>
-      <button class="submit-btn" type="button" style="background:var(--danger);" onclick="applyVoiceRouting('hazard')">⚠️ ${T('ده بلاغ خطورة')}</button>
-    </div>
-  `;
-  openAppModal(html);
-}
-
-function applyVoiceRouting(kind) {
-  const pending = _pendingVoiceResult || {};
-  const permitTypeKey = pending.permitTypeKey || 'general';
-  const locationMatch = pending.locationMatch || null;
-  const text = pending.text || '';
-  _pendingVoiceResult = null;
-  closeAppModal();
-  if (kind === 'permit') {
-    switchTab('worker');
-    selectType(permitTypeKey || 'general');
-    setTimeout(() => {
-      const descEl = document.getElementById('f_desc');
-      if (descEl) descEl.value = text;
-      if (locationMatch) {
-        const locEl = document.getElementById('workLocationSelect');
-        if (locEl) locEl.value = locationMatch;
-      }
-      showToast(T('✅ اتملت البيانات المتاحة من كلامك — كمّل الباقي وابعت الطلب'), 'success');
-    }, 0);
-  } else {
-    switchTab('hazardWorker');
-    setTimeout(() => {
-      const descEl = document.getElementById('hz_desc');
-      if (descEl) descEl.value = text;
-      showToast(T('✅ اتملت البيانات المتاحة من كلامك — كمّل الباقي وابعت البلاغ'), 'success');
-    }, 0);
-  }
-}
+// ملحوظة (20 سبتمبر 2026): كان هنا مودال "بلاغ/طلب صوتي" منفصل بيصنّف
+// الكلام محليًا لتصريح أو بلاغ. اتشال لأن الإدخال الصوتي بقى جوه الشات بوت
+// نفسه (زرار المايك في شريط الكتابة)، والتصنيف والتوجيه بقوا على السيرفر
+// في lib/chatbot-nav.js — فبقى يفهم كمان "وديني على تبويب كذا" وأي سؤال
+// عادي، مش بس تصريح/بلاغ.
 
 let currentFilter = 'الكل';
 let currentTypeFilter = 'الكل';
@@ -1347,8 +1120,6 @@ function applyRbacUI() {
   const notifContainer = document.getElementById('notifContainer');
   if (notifContainer) notifContainer.style.display = (isWorker || isSup) ? 'inline-flex' : 'none';
 
-  // 🎤 زرار البلاغ/الطلب الصوتي — للعامل بس (إضافة 15 سبتمبر 2026)
-  setDisplay('voiceReportBtn', isWorker);
 }
 
 /**
@@ -12224,6 +11995,9 @@ let _cbOpen = false;
 let _cbOwner = '';
 let _cbBusy = false;
 let _cbTopic = null; // موضوع آخر إجابة (للأسئلة اللي بتكمّل على اللي قبلها)
+// سؤال معلّق عن خانة ناقصة في نموذج (تصريح/بلاغ) — بيتخزّن هنا في المتصفح
+// بس، وبيترجع للسيرفر مع الرسالة الجاية عشان يعرف الإجابة بتاعت إيه.
+let _cbPending = null;
 
 function chatbotOwnerKey() {
   if (sessionRole === 'worker' && typeof currentEmployee !== 'undefined' && currentEmployee) return 'w:' + currentEmployee.empCode;
@@ -12241,6 +12015,7 @@ function resetChatbot() {
   _cbOwner = '';
   _cbBusy = false;
   _cbTopic = null;
+  _cbPending = null;
   const box = document.getElementById('cbMessages');
   if (box) box.innerHTML = '';
   const input = document.getElementById('cbInput');
@@ -12382,16 +12157,19 @@ async function sendChatbotMessage(preset) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // موضوع آخر إجابة بيتبعت مع السؤال عشان أسئلة المتابعة ("وفي القسم كله؟")
-      body: JSON.stringify({ text, context: _cbTopic })
+      body: JSON.stringify({ text, context: Object.assign({}, _cbTopic || {}, _cbPending ? { pending: _cbPending } : {}) })
     });
     const data = await res.json().catch(() => ({}));
     if (data && data.topic) _cbTopic = data.topic;
+    if (data) _cbPending = data.followup || null;
     _cbTyping(false);
     if (chatbotOwnerKey() !== owner) { resetChatbot(); return; } // الحساب اتغير أثناء الانتظار
     if (!res.ok) {
       appendChatbotMessage('bot', data.error || data.reply || T('حصل خطأ، حاول تاني.'));
     } else {
       appendChatbotMessage('bot', data.reply, data.source, data.suggestions);
+      // إجراء جاي من السيرفر (فتح تابة / تجهيز نموذج) — إضافة 20 سبتمبر 2026
+      if (data.action) applyChatbotAction(data.action);
     }
   } catch (err) {
     _cbTyping(false);
@@ -12401,4 +12179,251 @@ async function sendChatbotMessage(preset) {
     if (sendBtn) sendBtn.disabled = false;
     if (input) input.focus();
   }
+}
+
+// ============================================================
+// 📂 تنفيذ إجراءات الشات بوت (فتح تابة / تجهيز نموذج)
+// ============================================================
+// السيرفر (lib/chatbot-nav.js) بيقرر التابة حسب صلاحية صاحب الجلسة،
+// والفلتر في server.js بيقصّ أي إجراء برّه القايمة البيضا. هنا بننفّذ بس،
+// وswitchTab نفسها فيها حارس صلاحيات تالت.
+// خريطة الحقول: مفتاح من السيرفر → id الحقيقي في النموذج. مفصولة حسب
+// التابة لأن "desc" معناها خانة وصف العملية في التصريح، وخانة وصف الخطورة
+// في البلاغ.
+const CHATBOT_FILL_MAP = {
+  worker: { desc: 'f_desc', workers: 'f_workers', location: 'workLocationSelect', equip: 'f_equip' },
+  hazardWorker: {
+    desc: 'hz_desc', dept: 'hz_dept', area: 'hz_area', injury: 'hz_injury',
+    solution: 'hz_solution', likelihood: 'hz_likelihood', severity: 'hz_severity',
+  },
+};
+
+/** بيحط قيمة في حقل (input/textarea/select) ويعلّمه إنه اتملى تلقائيًا */
+function _cbFillField(id, value) {
+  const el = document.getElementById(id);
+  if (!el || !value) return false;
+  if (el.tagName === 'SELECT') {
+    // القيمة لازم تكون خيار موجود فعلاً، وإلا نسيب الحقل زي ما هو
+    const ok = Array.from(el.options).some(o => o.value === value);
+    if (!ok) return false;
+    el.value = value;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  } else {
+    el.value = value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  // وميض بسيط عشان المستخدم يشوف بعينه إيه اللي اتملى ويراجعه
+  el.classList.add('cb-autofilled');
+  setTimeout(() => el.classList.remove('cb-autofilled'), 2600);
+  return true;
+}
+
+function applyChatbotAction(action) {
+  if (!action || !action.tab) return;
+  // 'fill' = إجابة على سؤال معلّق والنموذج مفتوح أصلاً → نملا الخانة في
+  // مكانها من غير ما نقفل الشات ولا ننقل المستخدم.
+  if (action.type === 'fill') { _cbApplyFill(action, false); return; }
+  if (action.type !== 'navigate') return;
+  // مهلة قصيرة عشان المستخدم يلحق يقرا رد البوت قبل ما الشاشة تتغيّر
+  setTimeout(() => {
+    closeChatbot();
+    switchTab(action.tab);
+    if (action.permitType && typeof selectType === 'function') {
+      try { selectType(action.permitType); } catch (e) { /* نوع تصريح مش متاح — التابة اتفتحت وخلاص */ }
+    }
+    _cbApplyFill(action, true);
+  }, 900);
+}
+
+/** بيملا خانات النموذج من action.fill — بيحاول تاني لو النموذج لسه بيترسم */
+function _cbApplyFill(action, withToast) {
+  {
+    if (!action.fill) return;
+    const map = CHATBOT_FILL_MAP[action.tab];
+    if (!map) return;
+
+    // نموذج التصريح بيترسم من جديد بعد selectType، فبنحاول أكتر من مرة
+    // لحد ما الحقول تبقى موجودة فعلاً في الصفحة.
+    let tries = 0;
+    const tryFill = () => {
+      tries++;
+      const firstKey = Object.keys(action.fill).find(k => map[k]);
+      if (!firstKey) return;
+      if (!document.getElementById(map[firstKey]) && tries < 8) {
+        setTimeout(tryFill, 150);
+        return;
+      }
+      let filledAny = false;
+      let firstEl = null;
+      Object.entries(action.fill).forEach(([key, val]) => {
+        if (!map[key]) return;
+        if (_cbFillField(map[key], val)) {
+          filledAny = true;
+          if (!firstEl) firstEl = document.getElementById(map[key]);
+        }
+      });
+      // تحديث بادج الخطورة بعد ملء الاحتمالية/الشدة
+      if ((action.fill.likelihood || action.fill.severity) && typeof calculateHazardRisk === 'function') {
+        try { calculateHazardRisk(); } catch (e) { /* البادج هيتحدّث لما يغيّر بنفسه */ }
+      }
+      if (filledAny && firstEl && withToast) {
+        try { firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { /* متصفح قديم */ }
+        showToast(T('✅ ملّيت اللي فهمته من كلامك — راجعه وكمّل الباقي'), 'success');
+      }
+    };
+    tryFill();
+  }
+}
+
+// ============================================================
+// 🎤 الإدخال الصوتي — جوه الشات بوت (إعادة بناء 20 سبتمبر 2026)
+// ============================================================
+// قبل كده كان مودال منفصل بيصنّف الكلام لتصريح/بلاغ بس، ولو التسجيل فشل
+// كان بيقول "حصل خطأ" من غير سبب — وده كان بيخلي المستخدم يفتكر إن المايك
+// باظ. دلوقتي: المايك جوه الشات، بيكتب كلامك في نفس الخانة، فأي حاجة تقولها
+// بتعدي على نفس عقل الشات بوت (سؤال، طلب تصريح، بلاغ، أو تنقّل لتابة)،
+// وكل سبب فشل ليه رسالة صريحة بالعربي.
+let _cbVoice = { rec: null, recording: false, stopping: false, finalText: '', maxTimer: null };
+const CB_VOICE_MAX_MS = 60000; // أقصى مدة تسجيل متواصلة
+
+/** سبب منع المايك (لو فيه) — بنقوله للمستخدم بدل ما يخمّن */
+function chatbotMicBlockReason() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  // المتصفحات بتمنع المايك تمامًا على http عادي (غير localhost) — السبب
+  // الأشهر لـ"التسجيل مش شغال" لما الناس بتفتح المنصة بالـ IP على الشبكة.
+  if (!window.isSecureContext) {
+    return T('المتصفح بيمنع المايك لأن المنصة مفتوحة على اتصال غير مشفّر (http). افتحها من localhost على نفس الجهاز، أو من لينك https، وهيشتغل على طول. لحد ما ده يتظبط اكتب سؤالك وهرد عليك عادي.');
+  }
+  if (!SR) {
+    return T('المتصفح ده مش بيدعم التسجيل الصوتي — استخدم Chrome أو Edge. اكتب سؤالك عادي وهتعامل معاه بنفس الطريقة.');
+  }
+  return null;
+}
+
+function _cbMicUI(on) {
+  const btn = document.getElementById('cbMic');
+  if (btn) {
+    btn.classList.toggle('is-recording', !!on);
+    btn.title = on ? T('إيقاف التسجيل') : T('اسأل بصوتك');
+  }
+  const input = document.getElementById('cbInput');
+  if (input) input.placeholder = on ? T('🔴 بسمعك دلوقتي... اتكلم') : T('اكتب سؤالك هنا...');
+}
+
+function stopChatbotMic(opts) {
+  const autoSend = !opts || opts.autoSend !== false;
+  _cbVoice.stopping = true;
+  _cbVoice.autoSend = autoSend;
+  if (_cbVoice.maxTimer) { clearTimeout(_cbVoice.maxTimer); _cbVoice.maxTimer = null; }
+  if (_cbVoice.rec) { try { _cbVoice.rec.stop(); } catch (e) { /* خلص أصلاً */ } }
+}
+
+async function toggleChatbotMic() {
+  if (_cbVoice.recording) { stopChatbotMic(); return; }
+  const blocked = chatbotMicBlockReason();
+  if (blocked) { appendChatbotMessage('bot', '🎤 ' + blocked); return; }
+  // بنطلب الإذن صراحة الأول عشان نفرّق بين "المستخدم رفض" و"مفيش مايك
+  // متوصل" — SpeechRecognition لوحدها بترجّع كود مبهم في الحالتين.
+  try {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(t => t.stop());
+    }
+  } catch (err) {
+    const name = (err && err.name) || '';
+    appendChatbotMessage('bot', '🎤 ' + (
+      name === 'NotAllowedError' || name === 'SecurityError'
+        ? T('إذن المايك مرفوض. دوس على علامة القفل 🔒 جنب عنوان الموقع في المتصفح، خلي "الميكروفون" مسموح، وجرّب تاني.')
+        : name === 'NotFoundError' || name === 'DevicesNotFoundError'
+          ? T('مفيش ميكروفون متوصل بالجهاز ده.')
+          : T('مش قادر أفتح المايك') + ' (' + (name || T('خطأ غير معروف')) + ').'));
+    return;
+  }
+  _startChatbotMic();
+}
+
+function _startChatbotMic() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const input = document.getElementById('cbInput');
+  let rec;
+  try { rec = new SR(); } catch (e) {
+    appendChatbotMessage('bot', '🎤 ' + T('مش قادر أشغّل التسجيل على المتصفح ده.'));
+    return;
+  }
+  rec.lang = 'ar-EG';
+  rec.interimResults = true;
+  rec.continuous = true;
+  _cbVoice.finalText = (input && input.value ? input.value.trim() + ' ' : '');
+  _cbVoice.stopping = false;
+  _cbVoice.autoSend = true;
+
+  rec.onstart = () => {
+    _cbVoice.recording = true;
+    _cbMicUI(true);
+    _cbVoice.maxTimer = setTimeout(() => stopChatbotMic({ autoSend: false }), CB_VOICE_MAX_MS);
+  };
+
+  rec.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const chunk = e.results[i][0].transcript;
+      if (e.results[i].isFinal) _cbVoice.finalText += chunk + ' ';
+      else interim += chunk;
+    }
+    if (input) input.value = (_cbVoice.finalText + interim).trim();
+  };
+
+  rec.onerror = (e) => {
+    const code = (e && e.error) || '';
+    // no-speech/aborted بيحصلوا عادي لما المستخدم يسكت شوية — مش أخطاء
+    if (code === 'no-speech' || code === 'aborted') return;
+    _cbVoice.stopping = true;
+    appendChatbotMessage('bot', '🎤 ' + (
+      code === 'not-allowed' || code === 'service-not-allowed'
+        ? T('إذن المايك مرفوض من المتصفح. افتح إعدادات الموقع (علامة القفل جنب العنوان) واسمح بالميكروفون.')
+        : code === 'network'
+          ? T('خدمة تحويل الصوت لنص محتاجة إنترنت، والاتصال مش متاح دلوقتي.')
+          : code === 'audio-capture'
+            ? T('مفيش ميكروفون شغال على الجهاز ده.')
+            : T('حصل خطأ في التسجيل') + ' (' + code + ').'
+    ) + ' ' + T('اكتب سؤالك عادي وهجاوبك زي ما هو.'));
+  };
+
+  rec.onend = () => {
+    // Chrome بيوقف التسجيل لوحده بعد كام ثانية سكوت. طول ما المستخدم
+    // مضغطش "إيقاف" بنفسه، بنرجّع نشغّله عشان الجملة الطويلة ماتتقطعش.
+    if (_cbVoice.recording && !_cbVoice.stopping) {
+      try { rec.start(); return; } catch (e) { /* مش قادر يكمّل — بنقفل عادي */ }
+    }
+    _cbVoice.recording = false;
+    if (_cbVoice.maxTimer) { clearTimeout(_cbVoice.maxTimer); _cbVoice.maxTimer = null; }
+    _cbMicUI(false);
+    const val = (input && input.value || '').trim();
+    // لو المستخدم هو اللي وقّف التسجيل وفيه كلام → نبعته تلقائي (مهلة صغيرة
+    // عشان آخر جزء من الكلام يلحق يوصل)، وإلا نسيبه يراجع بنفسه.
+    if (_cbVoice.autoSend !== false && val && !_cbBusy) {
+      setTimeout(() => { if ((document.getElementById('cbInput') || {}).value) sendChatbotMessage(); }, 350);
+    } else if (input) {
+      input.focus();
+    }
+  };
+
+  _cbVoice.rec = rec;
+  try {
+    rec.start();
+  } catch (err) {
+    _cbVoice.recording = false;
+    _cbMicUI(false);
+    appendChatbotMessage('bot', '🎤 ' + T('مش قادر أبدأ التسجيل، جرّب تاني بعد ثانية.'));
+  }
+}
+
+/** زرار المايك اللي في الهيدر: بيفتح الشات بوت ويبدأ التسجيل على طول */
+function openVoiceInChatbot() {
+  if (!_cbOpen) toggleChatbot();
+  setTimeout(() => {
+    const blocked = chatbotMicBlockReason();
+    if (blocked) { appendChatbotMessage('bot', '🎤 ' + blocked); return; }
+    toggleChatbotMic();
+  }, 250);
 }

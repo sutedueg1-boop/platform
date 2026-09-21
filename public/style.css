@@ -2947,6 +2947,39 @@ body[data-theme="dark"] .login-v2 .wl-link-btn { color: #74c0fc; }
 .cb-send:disabled { opacity: 0.5; cursor: default; }
 html[dir="rtl"] .cb-send svg { transform: scaleX(-1); }
 
+/* 🎤 زرار المايك جوه الشات (20 سبتمبر 2026) — نفس مقاس زرار الإرسال بس
+   بشكل ثانوي، وبينبض بالأحمر وهو بيسجّل عشان يبان إن المايك فاتح فعلاً. */
+.cb-mic {
+  width: 48px;
+  border: 1px solid rgba(226, 0, 26, 0.35);
+  border-radius: 14px;
+  background: transparent;
+  color: #e2001a;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.cb-mic:hover { background: rgba(226, 0, 26, 0.08); transform: translateY(-1px); }
+.cb-mic:active { transform: translateY(0); }
+.cb-mic.is-recording {
+  background: linear-gradient(135deg, #e2001a, #8a0e1f);
+  color: #fff;
+  border-color: transparent;
+  animation: cbMicPulse 1.3s ease-in-out infinite;
+}
+@keyframes cbMicPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(226, 0, 26, 0.55); }
+  50% { box-shadow: 0 0 0 10px rgba(226, 0, 26, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cb-mic.is-recording { animation: none; }
+}
+body[data-theme="dark"] .cb-mic { color: #ff6b7d; border-color: rgba(255, 107, 125, 0.4); }
+body[data-theme="dark"] .cb-mic.is-recording { color: #fff; }
+
 /* الوضع الليلي: الأحمر الغامق بيضيع على الخلفية السودا — درجات أفتح للاقتراحات وفقاعة البوت */
 body[data-theme="dark"] .cb-panel { color: var(--ink); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7); }
 body[data-theme="dark"] .cb-messages { background: #101010; }
@@ -6468,68 +6501,21 @@ body, .sup-card, .ticket, .app-header, .tabs, .um-add-card,
 }
 
 /* ============================================================
-   🎤 بلاغ/طلب صوتي (إضافة 15 سبتمبر 2026)
-   ============================================================ */
-.voice-report-btn {
-  background: var(--primary);
-  border: none;
-  color: #fff;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  font-size: 1.15rem;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+   ✨ حقل اتملى تلقائيًا من الشات بوت (20 سبتمبر 2026)
+   ============================================================
+   وميض قصير على أي خانة الشات بوت ملاها، عشان المستخدم يشوف بعينه
+   إيه اللي اتكتب له ويراجعه قبل ما يبعت. */
+.cb-autofilled {
+  animation: cbAutofillFlash 2.4s ease-out;
 }
-.voice-report-btn:hover { transform: scale(1.06); }
-
-.voice-hint { font-size: 12.5px; color: var(--muted); margin: 0 0 14px; }
-.voice-record-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.voice-record-btn {
-  border: none;
-  border-radius: 999px;
-  padding: 10px 18px;
-  font-size: 13.5px;
-  font-weight: 700;
-  cursor: pointer;
-  background: var(--primary);
-  color: #fff;
+@keyframes cbAutofillFlash {
+  0%   { background: rgba(226, 0, 26, 0.16); box-shadow: 0 0 0 3px rgba(226, 0, 26, 0.25); }
+  70%  { background: rgba(226, 0, 26, 0.06); box-shadow: 0 0 0 2px rgba(226, 0, 26, 0.12); }
+  100% { background: transparent; box-shadow: none; }
 }
-.voice-record-btn.is-recording {
-  background: var(--danger);
-  animation: voicePulse 1.2s infinite;
+@media (prefers-reduced-motion: reduce) {
+  .cb-autofilled { animation: none; outline: 2px solid rgba(226, 0, 26, 0.45); }
 }
-@keyframes voicePulse {
-  0%   { box-shadow: 0 0 0 0 rgba(200, 30, 58, 0.5); }
-  70%  { box-shadow: 0 0 0 10px rgba(200, 30, 58, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(200, 30, 58, 0); }
-}
-.voice-record-status { font-size: 12.5px; color: var(--muted); }
-.voice-unsupported-note {
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--warning);
-  background: rgba(217, 119, 6, 0.08);
-  padding: 8px 12px;
-  border-radius: 8px;
-  margin-bottom: 12px;
-}
-.voice-suggest-box {
-  font-size: 15px;
-  font-weight: 800;
-  text-align: center;
-  padding: 14px;
-  border-radius: 10px;
-  background: var(--paper-line);
-  color: var(--ink);
-}
-.voice-swap-row { text-align: center; }
-.voice-choice-row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }
-.voice-choice-row .submit-btn { flex: 1; min-width: 140px; }
 
 /* ============================================================
    🛡️ AUDIT LOG — عرض بشكل خط زمني (Timeline)

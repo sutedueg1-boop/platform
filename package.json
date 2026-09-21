@@ -9,6 +9,7 @@
     "build:assets": "terser public/app.js -c -m --comments false -o public/app.min.js && node tools/minify-css.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.127.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^13.0.3",
     "clean-css": "^5.3.3",
@@ -20,7 +21,7 @@
     "express": "^4.19.2",
     "express-rate-limit": "^8.6.2",
     "jsonwebtoken": "^9.0.3",
-    "nodemailer": "^7.0.13",
+    "nodemailer": "^10.0.10",
     "pdfkit": "^0.20.2",
     "qrcode": "^1.5.4",
     "selfsigned": "^5.5.0",

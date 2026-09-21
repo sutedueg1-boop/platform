@@ -428,20 +428,9 @@
             <div class="emp-badge-pill" id="empBadgePill"></div>
           </div>
 
-          <!-- 🎤 بلاغ/طلب صوتي — للعامل بس. إضافة 15 سبتمبر 2026 (بطلب
-               بشمهندس أحمد): زرار ثابت متاح من أي تبويب، يفتح نافذة تسجيل
-               صوتي بتحدد نوع الطلب (تصريح/بلاغ) وتوديه للمكان الصح جاهز
-               جزئيًا. الظهور الفعلي بيتحكم فيه applyRbacUI() في app.js. -->
-          <button
-            type="button"
-            id="voiceReportBtn"
-            class="voice-report-btn"
-            style="display: none"
-            onclick="openVoiceReportModal()"
-            title="بلاغ أو طلب بالصوت"
-          >
-            🎤
-          </button>
+          <!-- (اتشال 20 سبتمبر 2026) كان هنا زرار مايك منفصل في الهيدر.
+               بقى مايك واحد بس جوه الشات بوت نفسه — مكان واحد للصوت
+               والكتابة، ونفس العقل بيفهم السؤال والطلب والبلاغ والتنقّل. -->
 
           <!-- بادج المستخدم الحالي (مدير/مشرف) + تسجيل الخروج — يظهر دايمًا في الشريط العلوي الثابت -->
           <div id="globalUserBar" class="global-user-bar" style="display: none">
@@ -2593,6 +2582,12 @@
       <form class="cb-input-row" onsubmit="event.preventDefault(); sendChatbotMessage();">
         <input type="text" id="cbInput" autocomplete="off" maxlength="500" enterkeyhint="send" placeholder="اكتب سؤالك هنا..."
                onkeydown="if (event.key === 'Enter' &amp;&amp; !event.isComposing) { event.preventDefault(); sendChatbotMessage(); }" />
+        <!-- المايك جوه الشات نفسه (20 سبتمبر 2026): بيحوّل كلامك لنص في نفس
+             الخانة، فأي حاجة تقولها بصوتك بتعدي على نفس عقل الشات بوت —
+             سؤال، طلب تصريح، بلاغ، أو "وديني على تبويب كذا". -->
+        <button type="button" id="cbMic" class="cb-mic" onclick="toggleChatbotMic()" title="اسأل بصوتك" aria-label="اسأل بصوتك">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V22h2v-3.1A7 7 0 0 0 19 12h-2Z"/></svg>
+        </button>
         <button type="submit" id="cbSend" class="cb-send" aria-label="إرسال">
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6v6.4l12.6 2-12.6 2z"/></svg>
         </button>
