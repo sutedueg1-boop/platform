@@ -99,6 +99,11 @@ if (!JWT_SECRET) {
 // ── Paths ─────────────────────────────────────────────────────
 const DATA_DIR  = path.join(__dirname, 'data');
 const UPLOADS_DIR = path.join(__dirname, 'public', 'uploads', 'hazards');
+// تسجيلات المحاضرات (فيديو) — إضافة 15 سبتمبر 2026. اتخزّن على القرص زي
+// صور البلاغات بالظبط، بحد أقصى صغير (انظر MAX_RECORDING_UPLOAD_BYTES تحت)
+// لأن الرفع بيعدّي عبر JSON base64 (حد الجسم الكلي 50MB) — تسجيلات أطول من
+// كذا لازم تتحط كرابط خارجي (يوتيوب غير مُدرج / درايف) بدل الرفع المباشر.
+const TRAINING_UPLOADS_DIR = path.join(__dirname, 'public', 'uploads', 'trainings');
 const DATA_FILE = path.join(DATA_DIR, 'storage.json');
 const HAZARDS_FILE = path.join(DATA_DIR, 'hazard-reports.json');
 const EXCEL_FILE = path.join(DATA_DIR, 'permits_log.xlsx');
@@ -157,6 +162,9 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+if (!fs.existsSync(TRAINING_UPLOADS_DIR)) {
+  fs.mkdirSync(TRAINING_UPLOADS_DIR, { recursive: true });
 }
 
 // ── Initial Training Topics (seeded into DB on first boot only) ──
@@ -223,6 +231,9 @@ const penaltiesStore         = makeStore('penalties', []);
 const employeesStore         = makeStore('employees', []);
 const trainingTopicsStore    = makeStore('training-topics', []);
 const trainingsStore         = makeStore('trainings', []);
+// طلبات محاضرات من العمال (عمال بيطلبوا موضوع معيّن من السلامة) — إضافة
+// 14 سبتمبر 2026 بطلب بشمهندس أحمد.
+const trainingRequestsStore  = makeStore('training-requests', []);
 const drillsStore            = makeStore('drills', []);
 const notificationsStore     = makeStore('notifications', []);
 const subscriptionsStore     = makeStore('subscriptions', []);
@@ -352,6 +363,16 @@ const attendLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'تجاوزت عدد محاولات تسجيل الحضور. حاول مجدداً بعد 15 دقيقة.' }
+});
+
+// طلبات محاضرات من العمال — حد أقصى معقول يمنع الإغراق بدون ما يضايق
+// استخدام عادي (إضافة 14 سبتمبر 2026).
+const trainingRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'تجاوزت عدد طلبات المحاضرات المسموح بها. حاول مجدداً بعد شوية.' }
 });
 
 /** Chatbot: max 60 messages per 15 min per IP — يمنع إساءة استخدام/إغراق البحث */
@@ -732,6 +753,14 @@ function readTrainings() {
   return trainingsStore.read();
 }
 
+function readTrainingRequests() {
+  return trainingRequestsStore.read();
+}
+
+function writeTrainingRequests(data) {
+  return trainingRequestsStore.write(data);
+}
+
 function readDrills() {
   return drillsStore.read();
 }
@@ -830,7 +859,7 @@ function notifyWorkerWhatsAppPermitStatus(permit) {
  * Creates a notification and appends it to the storage safely using enqueueWrite.
  * @param {Object} options - { targetRole, targetEmpCode, targetGroup, type, title, message, link }
  */
-function createNotification({ targetRole, targetEmpCode, targetGroup, type, title, message, link, targetId }) {
+function createNotification({ targetRole, targetEmpCode, targetGroup, targetDept, type, title, message, link, targetId }) {
   enqueueWrite(async () => {
     const notifications = readNotifications();
     const newNotif = {
@@ -838,6 +867,10 @@ function createNotification({ targetRole, targetEmpCode, targetGroup, type, titl
       targetRole: targetRole || null,
       targetEmpCode: targetEmpCode ? normalizeEmpCode(targetEmpCode) : null,
       targetGroup: targetGroup || null,
+      // targetDept: قصر إشعار targetRole:'worker' على قسم واحد بس (إضافة
+      // 15 سبتمبر 2026 لدعم استهداف المحاضرات الفعلي بقسم معيّن). لاحظ إن
+      // ده مختلف عن targetGroup اللي فضل بس نص عرض وصفي بلا تأثير.
+      targetDept: targetDept || null,
       type: type || 'system',
       title: sanitizeStr(title, 200),
       message: sanitizeStr(message, 1000),
@@ -857,17 +890,35 @@ function createNotification({ targetRole, targetEmpCode, targetGroup, type, titl
     
     // Trigger Web Push Notification
     const subscriptions = readSubscriptions();
+    // رابط حقيقي قابل للفتح (مش مجرد اسم تاب زي 'tabPermits') — عشان لما
+    // المستخدم يضغط على إشعار الـ OS والتطبيق مقفول خالص، المتصفح يفتح
+    // الصفحة على الرابط ده مباشرة، وapp.js عند التحميل بيقرأ الباراميترات
+    // دي ويوجّه للتاب/العنصر الصحيح تلقائيًا (إضافة 14 سبتمبر 2026).
+    const pushUrl = '/?openTab=' + encodeURIComponent(newNotif.link || '')
+      + '&ntype=' + encodeURIComponent(newNotif.type || '')
+      + (newNotif.targetId ? ('&targetId=' + encodeURIComponent(newNotif.targetId)) : '')
+      + '&nid=' + encodeURIComponent(newNotif.id);
     const payload = JSON.stringify({
       title: newNotif.title,
       body: newNotif.message,
-      link: newNotif.link,
+      link: pushUrl,
       targetId: newNotif.targetId,
       type: newNotif.type
     });
     
     let validSubscriptions = [];
     let subscriptionsChanged = false;
-    
+
+    // لو الإشعار مقصور على قسم معيّن (targetDept)، نبني خريطة كود→قسم مرة
+    // واحدة بس لكل نداء، بدل ما نعمل lookup لكل subscription لوحده (إضافة
+    // 15 سبتمبر 2026 — دعم استهداف المحاضرات بقسم فعليًا في الـ Push).
+    let empDeptMapForPush = null;
+    if (newNotif.targetDept) {
+      empDeptMapForPush = new Map(
+        readEmployees().map(e => [normalizeEmpCode(e.code || e.empCode || e.id), String(e.department || '').trim().toLowerCase()])
+      );
+    }
+
     const sendPromises = subscriptions.map(sub => {
       let shouldSend = false;
       if (newNotif.targetRole === 'all') shouldSend = true;
@@ -878,7 +929,17 @@ function createNotification({ targetRole, targetEmpCode, targetGroup, type, titl
         if (newNotif.targetRole === 'dept_admin' && sub.role === 'maint_admin') shouldSend = true;
         if (newNotif.targetRole === 'maint_admin' && sub.role === 'dept_admin') shouldSend = true;
       }
-      
+      // targetDept موجود: نضيّق الإرسال لأصحاب نفس القسم بس (بيؤثر بس على
+      // الحالات اللي اتفعّلت أعلاه بسبب تطابق الدور، مش على targetEmpCode
+      // المباشر ولا على 'all').
+      if (shouldSend && newNotif.targetDept && !(newNotif.targetEmpCode || newNotif.targetRole === 'all')) {
+        const subDept = empDeptMapForPush.get(normalizeEmpCode(sub.empCode || '')) || '';
+        shouldSend = subDept === String(newNotif.targetDept).trim().toLowerCase();
+      }
+      // حسابات المتابعة العليا (CEO/HSE Director) ما توصلهاش أي إشعار Push إطلاقًا
+      // — بطلب بشمهندس أحمد 13 سبتمبر 2026، مهما كان الـ targetRole (حتى 'all').
+      if (VIEWER_ROLES.includes(sub.role)) shouldSend = false;
+
       if (shouldSend) {
         return webpush.sendNotification(sub.subscription, payload).then(() => {
           validSubscriptions.push(sub);
@@ -913,7 +974,13 @@ function createNotification({ targetRole, targetEmpCode, targetGroup, type, titl
         if (newNotif.targetRole === 'admin' && ADMIN_TIER_ROLES.includes(client.role)) shouldSend = true;
         if (newNotif.targetRole === client.role) shouldSend = true;
       }
-      
+      if (shouldSend && newNotif.targetDept && !(newNotif.targetEmpCode || newNotif.targetRole === 'all')) {
+        const subDept = empDeptMapForPush ? (empDeptMapForPush.get(normalizeEmpCode(client.empCode || '')) || '') : '';
+        shouldSend = subDept === String(newNotif.targetDept).trim().toLowerCase();
+      }
+      // نفس استثناء حسابات المتابعة العليا أعلاه، لأي بث لحظي مستقبلي عبر SSE.
+      if (VIEWER_ROLES.includes(client.role)) shouldSend = false;
+
       if (shouldSend) {
         try {
           client.res.write(`data: ${JSON.stringify(newNotif)}\n\n`);
@@ -3399,6 +3466,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   // Normalize and trim inputs
   const usernameStr = String(username || '').trim().toLowerCase();
   const empCodeStr = String(empCode || '').trim();
+  const searchCode = normalizeEmpCode(empCodeStr);
 
   // Find user ignoring case
   const user = users.find(u => String(u.username || '').trim().toLowerCase() === usernameStr);
@@ -3409,7 +3477,19 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     return res.status(401).json({ error: `اسم المستخدم غير موجود: ${usernameStr}` });
   }
 
-  const lockLeft = adminLockMinutesLeft(usernameStr);
+  // كلمة سر شخصية لكل شخص تحت الحساب المشترك (بالكود الوظيفي) — إضافة 15
+  // سبتمبر 2026 بطلب بشمهندس أحمد: اليوزر بتاع القسم فاضل زي ما هو (مشترك)،
+  // لكن كلمة السر بقت شخصية لكل واحد بكوده، مش كلمة سر واحدة يشاركها الكل.
+  // لو الكود ده لسه معملش كلمة سر شخصية على الحساب ده، كلمة سر الحساب
+  // المشتركة (أو المؤقتة) بتشتغل مرة واحدة بس عشان "ينضم"، وبعدها بيتطلب
+  // منه يعمل كلمة سره الشخصية فورًا (needsPersonalPassword تحت) — ومن
+  // لحظتها كلمة السر المشتركة ما بتشتغلش لكوده هو تحديدًا تاني.
+  const memberCred = (searchCode && user.memberCredentials && user.memberCredentials[searchCode]) || null;
+
+  // مفتاح القفل بقى لكل (حساب + كود) مش للحساب كله — عشان محاولات غلط من
+  // شخص واحد متقفلش زمايله في نفس القسم برّه الحساب.
+  const lockKey = searchCode ? `${usernameStr}::${searchCode}` : usernameStr;
+  const lockLeft = adminLockMinutesLeft(lockKey);
   if (lockLeft) {
     return res.status(429).json({ error: `محاولات غلط كتير على الحساب ده — استنى ${lockLeft} دقيقة وجرب تاني` });
   }
@@ -3417,38 +3497,49 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   // كلمات السر كلها متشفرة bcrypt (migratePasswordsIfNeeded بيشفّر أي نص عادي
   // عند التشغيل) — اتشال الـ fallback اللي كان بيقارن كلمة سر نص عادي.
   let isMatch = false;
-  if (typeof user.password === 'string' && user.password.startsWith('$2')) {
+  if (memberCred && typeof memberCred.passwordHash === 'string' && memberCred.passwordHash.startsWith('$2')) {
+    isMatch = await bcrypt.compare(String(password), memberCred.passwordHash);
+  } else if (typeof user.password === 'string' && user.password.startsWith('$2')) {
     isMatch = await bcrypt.compare(String(password), user.password);
   }
 
   if (!isMatch) {
-    const left = recordAdminLoginFail(usernameStr);
+    const left = recordAdminLoginFail(lockKey);
     console.log(`[LOGIN ERROR] Invalid password for username: ${usernameStr}`);
     return res.status(401).json({ error: left > 0 ? `كلمة المرور غير صحيحة — فاضل ${left} محاولات قبل قفل الحساب 15 دقيقة` : 'كلمة المرور غير صحيحة — الحساب اتقفل 15 دقيقة' });
   }
-  _adminLoginFails.delete(usernameStr);
+  _adminLoginFails.delete(lockKey);
 
-  // كلمة السر المؤقتة اللي بتتبعت على الإيميل ليها 30 دقيقة بس
-  if (user.mustChangePassword === true && user.otpExpiresAt && Date.now() > new Date(user.otpExpiresAt).getTime()) {
-    return res.status(403).json({ error: 'كلمة السر المؤقتة انتهت صلاحيتها — اطلب واحدة جديدة من "نسيت كلمة السر؟"', otpExpired: true });
-  }
+  if (memberCred) {
+    // "نسيت كلمة السر" لشخص عنده كلمة سر شخصية بالفعل بتبعتله كلمة سر مؤقتة
+    // في نفس السلوت الشخصي بتاعه (مش الحساب المشترك) — ليها 30 دقيقة بس.
+    if (memberCred.mustChangePassword === true && memberCred.otpExpiresAt && Date.now() > new Date(memberCred.otpExpiresAt).getTime()) {
+      return res.status(403).json({ error: 'كلمة السر المؤقتة انتهت صلاحيتها — اطلب واحدة جديدة من "نسيت كلمة السر؟"', otpExpired: true });
+    }
+  } else {
+    // الفحوصات الجاية (كلمة السر المؤقتة المنتهية / تسجيل دخول بكلمة السر
+    // الافتراضية) بتخص بس مسار كلمة السر المشتركة القديم — لو الشخص عنده
+    // كلمة سر شخصية بالفعل مالهاش لازمة (اتفحصت فوق).
+    // كلمة السر المؤقتة اللي بتتبعت على الإيميل ليها 30 دقيقة بس
+    if (user.mustChangePassword === true && user.otpExpiresAt && Date.now() > new Date(user.otpExpiresAt).getTime()) {
+      return res.status(403).json({ error: 'كلمة السر المؤقتة انتهت صلاحيتها — اطلب واحدة جديدة من "نسيت كلمة السر؟"', otpExpired: true });
+    }
 
-  // حسابات الأقسام/الصيانة اللي اتعملت تلقائيًا كلمة سرها الافتراضية معروفة
-  // (123456)، وأي حد يعرف كود موظف في القسم كان يقدر يدخل بيها ويغيّرها
-  // لنفسه. لازم السوبر أدمن يعملها كلمة سر جديدة الأول (شاشة المستخدمين).
-  // حسابات الأقسام اللي لسه على كلمة السر الافتراضية: بيدخلوا عادي، لكن أول
-  // شاشة بتقابلهم هي تغيير كلمة السر (mustChangePassword) ومش هيقدروا يعملوا
-  // حاجة قبلها. (كان الدخول مقفول تمامًا — اتغيّر بطلب بشمهندس أحمد 12 سبتمبر
-  // 2026 عشان الأقسام تقدر تدخل وتظبط كلمة سرها بنفسها.)
-  const isAutoDeptAccount = typeof user.id === 'string' && (user.id.startsWith('auto-dept-') || user.id.startsWith('auto-maint-'));
-  if (isAutoDeptAccount && user.mustChangePassword === true && String(password) === '123456') {
-    console.log(`[LOGIN] ${user.username} دخل بكلمة السر الافتراضية — هيتطلب منه تغييرها فورًا`);
+    // حسابات الأقسام/الصيانة اللي اتعملت تلقائيًا كلمة سرها الافتراضية معروفة
+    // (123456)، وأي حد يعرف كود موظف في القسم كان يقدر يدخل بيها ويغيّرها
+    // لنفسه. لازم السوبر أدمن يعملها كلمة سر جديدة الأول (شاشة المستخدمين).
+    // حسابات الأقسام اللي لسه على كلمة السر الافتراضية: بيدخلوا عادي، لكن أول
+    // شاشة بتقابلهم هي عمل كلمة سر شخصية (needsPersonalPassword) ومش هيقدروا
+    // يعملوا حاجة قبلها.
+    const isAutoDeptAccount = typeof user.id === 'string' && (user.id.startsWith('auto-dept-') || user.id.startsWith('auto-maint-'));
+    if (isAutoDeptAccount && user.mustChangePassword === true && String(password) === '123456') {
+      console.log(`[LOGIN] ${user.username} دخل بكلمة السر الافتراضية — هيتطلب منه يعمل كلمة سر شخصية فورًا`);
+    }
   }
 
   // Check empCode in employees sheet — يجب إن الكود الوظيفي يبقى موظف
   // متسجل فعليًا عندنا، للجميع (سوبر أدمن أو أدمن قسم)، من غير أي استثناء.
   const employees = readEmployees();
-  const searchCode = normalizeEmpCode(empCodeStr);
   let employee = employees.find(e => {
     const code = normalizeEmpCode(String(e.empCode || e.code || e.id || '').trim());
     return code === searchCode;
@@ -3531,7 +3622,14 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   res.json({
     success: true,
     token,
-    mustChangePassword: user.mustChangePassword === true,
+    // دخل بكلمة السر المشتركة/المؤقتة (لسه معملش كلمة سر شخصية بكوده) —
+    // الواجهة بتطلب منه يعمل واحدة فورًا، وده بيغني عن "لازم تتغير كلمة
+    // السر" القديمة (اللي كانت بتخص الحساب كله مش الشخص).
+    needsPersonalPassword: !memberCred,
+    // true بس لو ده كان دخول بكلمة سر مؤقتة اتبعتت لصاحب كلمة سر شخصية
+    // بالفعل نسيها ("نسيت كلمة السر؟") — بيفتح نفس شاشة "تغيير كلمة السر"
+    // القديمة (اللي بتاخد الحالية+الجديدة)، لأنه أصلاً عنده كلمة سر شخصية.
+    mustChangePassword: Boolean(memberCred && memberCred.mustChangePassword === true),
     needsProfile: !(profile && profile.phone && profile.email),
     profile: profile ? { phone: profile.phone || '', email: profile.email || '' } : null,
     previousHolder: lastHolder ? { name: lastHolder.name || '', empCode: lastHolder.empCode || '' } : null,
@@ -3554,9 +3652,11 @@ app.get('/api/auth/session', authenticateToken, (req, res) => {
   const lastHolder = user.lastHolder && user.lastHolder.empCode !== profileKey ? user.lastHolder : null;
   const employee = readEmployees().find(e => normalizeEmpCode(String(e.empCode || e.code || '')) === profileKey);
 
+  const memberCred = profileKey && user.memberCredentials && user.memberCredentials[profileKey];
   res.json({
     success: true,
-    mustChangePassword: user.mustChangePassword === true,
+    needsPersonalPassword: !memberCred,
+    mustChangePassword: Boolean(memberCred && memberCred.mustChangePassword === true),
     needsProfile: !(profile && profile.phone && profile.email),
     profile: profile ? { phone: profile.phone || '', email: profile.email || '' } : null,
     previousHolder: lastHolder ? { name: lastHolder.name || '', empCode: lastHolder.empCode || '' } : null,
@@ -3684,10 +3784,20 @@ app.post('/api/auth/forgot-password', loginLimiter, async (req, res) => {
     if (st['app-users']) { try { list = JSON.parse(st['app-users']); } catch { list = []; } }
     const idx = list.findIndex(u => String(u.username || '').trim().toLowerCase() === username);
     if (idx === -1) return;
-    list[idx].password = hash;
-    list[idx].mustChangePassword = true;
-    list[idx].otpExpiresAt = new Date(Date.now() + OTP_TTL_MS).toISOString();
-    list[idx].otpIssuedFor = empCode;
+    // لو صاحب الكود ده عنده كلمة سر شخصية بالفعل (memberCredentials — إضافة
+    // 15 سبتمبر 2026)، الكلمة المؤقتة بتتحط في سلوته الشخصي هو بس، مش في
+    // كلمة سر الحساب المشتركة (اللي مالهاش دعوة بمشكلته هو).
+    const hasMemberCred = Boolean(list[idx].memberCredentials && list[idx].memberCredentials[empCode]);
+    if (hasMemberCred) {
+      list[idx].memberCredentials[empCode].passwordHash = hash;
+      list[idx].memberCredentials[empCode].mustChangePassword = true;
+      list[idx].memberCredentials[empCode].otpExpiresAt = new Date(Date.now() + OTP_TTL_MS).toISOString();
+    } else {
+      list[idx].password = hash;
+      list[idx].mustChangePassword = true;
+      list[idx].otpExpiresAt = new Date(Date.now() + OTP_TTL_MS).toISOString();
+      list[idx].otpIssuedFor = empCode;
+    }
     st['app-users'] = JSON.stringify(list);
     writeStorage(st);
     ok = true;
@@ -3703,9 +3813,11 @@ app.post('/api/auth/forgot-password', loginLimiter, async (req, res) => {
 });
 
 // ── POST /api/auth/change-password — تغيير المستخدم لكلمة مروره الخاصة
-// يتطلب توكن صالح + كلمة المرور الحالية الصحيحة. يُستخدم خصوصًا لإجبار
-// أصحاب الحسابات الافتراضية/المولَّدة تلقائيًا (كلمة مرور معروفة مثل
-// admin123 / 123456) على تعيين كلمة مرور خاصة بهم قبل الاستمرار.
+// يتطلب توكن صالح + كلمة المرور الحالية الصحيحة. لو صاحب الجلسة عنده كلمة
+// سر شخصية على الحساب (memberCredentials — إضافة 15 سبتمبر 2026)، التغيير
+// بيحصل في نسخته الشخصية بس ومبيأثرش على زمايله في نفس الحساب المشترك؛ غير
+// كده بيرجع لسلوك تغيير كلمة سر الحساب المشتركة القديم (لحسابات لسه ما
+// دخلتش بالنظام الجديد أو حسابات فردية زي CEO).
 app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   if (!currentPassword || !newPassword) {
@@ -3732,22 +3844,89 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
     }
 
     const stored = users[idx];
-    const isMatch = stored.password && stored.password.startsWith('$2')
-      ? await bcrypt.compare(currentPassword, stored.password)
-      : currentPassword === stored.password;
+    const profileKey = normalizeEmpCode(req.user.empCode || '');
+    const memberCred = profileKey && stored.memberCredentials && stored.memberCredentials[profileKey];
+
+    const isMatch = memberCred && memberCred.passwordHash
+      ? await bcrypt.compare(currentPassword, memberCred.passwordHash)
+      : (stored.password && stored.password.startsWith('$2')
+          ? await bcrypt.compare(currentPassword, stored.password)
+          : currentPassword === stored.password);
     if (!isMatch) {
       result = { status: 401, body: { error: 'كلمة المرور الحالية غير صحيحة' } };
       return;
     }
 
-    users[idx].password = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-    users[idx].mustChangePassword = false;
-    delete users[idx].otpExpiresAt;   // كلمة السر المؤقتة اتستبدلت
-    delete users[idx].otpIssuedFor;
+    if (memberCred) {
+      users[idx].memberCredentials[profileKey].passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+      users[idx].memberCredentials[profileKey].updatedAt = new Date().toISOString();
+      delete users[idx].memberCredentials[profileKey].mustChangePassword; // كلمة السر المؤقتة اتستبدلت
+      delete users[idx].memberCredentials[profileKey].otpExpiresAt;
+    } else {
+      users[idx].password = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+      users[idx].mustChangePassword = false;
+      delete users[idx].otpExpiresAt;   // كلمة السر المؤقتة اتستبدلت
+      delete users[idx].otpIssuedFor;
+    }
     storage['app-users'] = JSON.stringify(users);
     writeStorage(storage);
     result = { status: 200, body: { success: true, message: 'تم تغيير كلمة المرور بنجاح' } };
   });
+  res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
+});
+
+// ── POST /api/auth/set-personal-password — أول كلمة سر شخصية لصاحب هذا
+// الكود على هذا الحساب المشترك (إضافة 15 سبتمبر 2026). بتتنادى فورًا بعد
+// دخول ناجح بكلمة سر الحساب المشتركة/المؤقتة (needsPersonalPassword=true في
+// رد /api/auth/login أو /api/auth/session). من لحظة الحفظ، كلمة سر الحساب
+// المشتركة ما بقتش تشتغل لصاحب الكود ده تحديدًا — لازم يستخدم كلمة سره هو.
+// لو عنده كلمة سر شخصية بالفعل، الـ endpoint ده بيرفض (يستخدم change-password
+// بدلها) عشان محدش يقدر "يسرق" حساب شخص عمل كلمة سره قبل كده.
+app.post('/api/auth/set-personal-password', authenticateToken, async (req, res) => {
+  const { newPassword } = req.body || {};
+  if (!newPassword || String(newPassword).length < 6) {
+    return res.status(400).json({ error: 'كلمة المرور يجب ألا تقل عن 6 أحرف' });
+  }
+  const profileKey = normalizeEmpCode(req.user.empCode || '');
+  if (!profileKey) {
+    return res.status(400).json({ error: 'الكود الوظيفي غير موجود في الجلسة — سجّل دخولك تاني' });
+  }
+
+  let result;
+  await enqueueWrite(async () => {
+    const storage = readStorage();
+    let users = [];
+    if (storage['app-users']) {
+      try { users = JSON.parse(storage['app-users']); } catch { users = []; }
+    }
+    const idx = users.findIndex(u => u.id === req.user.id || String(u.username || '').toLowerCase() === String(req.user.username || '').toLowerCase());
+    if (idx === -1) {
+      result = { status: 404, body: { error: 'المستخدم غير موجود' } };
+      return;
+    }
+    if (!users[idx].memberCredentials) users[idx].memberCredentials = {};
+    if (users[idx].memberCredentials[profileKey]) {
+      result = { status: 409, body: { error: 'عندك كلمة سر شخصية بالفعل على الحساب ده — استخدم "تغيير كلمة المرور"' } };
+      return;
+    }
+    users[idx].memberCredentials[profileKey] = {
+      passwordHash: await bcrypt.hash(String(newPassword), BCRYPT_ROUNDS),
+      name: req.user.name || '',
+      createdAt: new Date().toISOString()
+    };
+    storage['app-users'] = JSON.stringify(users);
+    if (writeStorage(storage)) {
+      result = { status: 200, body: { success: true, message: 'تم إنشاء كلمة السر الشخصية بنجاح' } };
+    } else {
+      result = { status: 500, body: { error: 'فشل الحفظ' } };
+    }
+  });
+  if (result && result.status === 200) {
+    logAuditEvent({
+      entityType: 'user', entityId: req.user.id || req.user.username, action: 'set_personal_password',
+      actor: req.user, note: `عمل كلمة سر شخصية جديدة على الحساب (${req.user.username})`,
+    });
+  }
   res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
 });
 
@@ -3825,7 +4004,13 @@ app.get('/api/users',
       phone:      u.phone || '',
       email:      u.email || '',
       createdAt:  u.createdAt,
-      mustChangePassword: u.mustChangePassword === true
+      mustChangePassword: u.mustChangePassword === true,
+      // مين اللي عمل كلمة سر شخصية بالفعل على الحساب المشترك ده (بلا أي
+      // كلمات سر مشفّرة) — إضافة 15 سبتمبر 2026 عشان السوبر أدمن يقدر يشوف
+      // ويصفّر كلمة سر شخص معيّن لوحده.
+      members: Object.entries(u.memberCredentials || {}).map(([code, c]) => ({
+        empCode: code, name: (c && c.name) || '', createdAt: (c && c.createdAt) || '', updatedAt: (c && c.updatedAt) || ''
+      }))
     }));
     res.json({ users: safeUsers });
   }
@@ -4044,6 +4229,56 @@ app.put('/api/users/:id',
       }
     });
 
+    res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
+  }
+);
+
+// ── PATCH /api/users/:id/reset-member-password — مسح كلمة السر الشخصية
+// لكود وظيفي معيّن على حساب مشترك (زي حساب رئيس قسم)، من غير ما يأثر على أي
+// زميل تاني بيستخدم نفس الحساب. الشخص ده هيتطلب منه يعمل كلمة سر شخصية
+// جديدة أول ما يدخل تاني (بنفس كلمة سر الحساب المشتركة الحالية أو المؤقتة).
+// إضافة 15 سبتمبر 2026 بطلب بشمهندس أحمد — نظير "🔑 إعادة تعيين كلمة سر
+// العامل" الموجودة بالفعل، لكن للأدمن بدل العامل.
+app.patch('/api/users/:id/reset-member-password',
+  authenticateToken,
+  requireRole('super_admin'),
+  async (req, res) => {
+    const empCode = normalizeEmpCode(sanitizeStr((req.body && req.body.empCode) || '', 20));
+    if (!empCode) return res.status(400).json({ error: 'الكود الوظيفي مطلوب' });
+
+    let result;
+    let memberName = '';
+    await enqueueWrite(async () => {
+      const storage = readStorage();
+      let users = [];
+      if (storage['app-users']) {
+        try { users = JSON.parse(storage['app-users']); } catch { users = []; }
+      }
+      const idx = users.findIndex(u => u.id === req.params.id);
+      if (idx === -1) {
+        result = { status: 404, body: { error: 'الحساب غير موجود' } };
+        return;
+      }
+      if (!users[idx].memberCredentials || !users[idx].memberCredentials[empCode]) {
+        result = { status: 404, body: { error: 'الشخص ده لسه معملش كلمة سر شخصية على الحساب ده' } };
+        return;
+      }
+      memberName = users[idx].memberCredentials[empCode].name || '';
+      delete users[idx].memberCredentials[empCode];
+      storage['app-users'] = JSON.stringify(users);
+      if (writeStorage(storage)) {
+        result = { status: 200, body: { success: true, message: 'تم مسح كلمة السر الشخصية — هيتطلب منه يعمل واحدة جديدة أول ما يدخل' } };
+      } else {
+        result = { status: 500, body: { error: 'فشل الحفظ' } };
+      }
+    });
+    if (result && result.status === 200) {
+      logAuditEvent({
+        entityType: 'user', entityId: req.params.id, action: 'reset_member_password',
+        actor: req.user, note: `مسح كلمة سر شخصية للكود ${empCode}${memberName ? ' (' + memberName + ')' : ''}`,
+      });
+      _adminLoginFails.forEach((_, key) => { if (key.endsWith(`::${empCode}`)) _adminLoginFails.delete(key); });
+    }
     res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
   }
 );
@@ -4588,12 +4823,34 @@ app.get('/api/trainings', authenticateToken, (req, res) => {
 });
 
 // Worker Dashboard Endpoint (No JWT required)
+// ── استهداف المحاضرات (قسم معيّن / عمال محددين بالكود) ─────────────────
+// إضافة 15 سبتمبر 2026: "الفئة المستهدفة" كانت مجرد نص وصفي بدون أي تأثير
+// فعلي — أي عامل من أي قسم كان يقدر يشوف أي محاضرة حية ويسجل حضوره فيها
+// بغض النظر عن الفئة المكتوبة. الدالة دي هي مصدر الحقيقة الوحيد لتحديد هل
+// المحاضرة موجّهة فعليًا لعامل معيّن، وبتتستخدم في عرض "محاضرة جارية الآن"
+// للعامل، وفي السماح الفعلي بتسجيل الحضور (POST /api/trainings/:id/attend).
+function trainingTargetsEmployee(training, empCode, employees) {
+  const mode = training.targetMode || 'all'; // محاضرات قديمة قبل هذا التحديث = "الجميع" (نفس السلوك السابق، بدون كسر بيانات قديمة)
+  if (mode === 'all') return true;
+  const nCode = normalizeEmpCode(empCode);
+  if (mode === 'workers') {
+    return (training.targetEmpCodes || []).map(normalizeEmpCode).includes(nCode);
+  }
+  if (mode === 'department') {
+    const emp = (employees || []).find(e => normalizeEmpCode(e.code || e.empCode || e.id) === nCode);
+    const myDept = emp ? String(emp.department || '').trim().toLowerCase() : '';
+    return !!myDept && myDept === String(training.targetDept || '').trim().toLowerCase();
+  }
+  return true;
+}
+
 app.get('/api/trainings/worker/:empCode', authenticateSession, (req, res) => {
   const code = req.worker ? req.worker.empCode : normalizeEmpCode(req.params.empCode);
   const trainings = readTrainings();
+  const employeesForTargeting = readEmployees();
   const attCode = (a) => normalizeEmpCode(a.empCode || a.code || a.employeeCode || a.id || '');
-  
-  const activeSession = trainings.find(t => t.status === 'active');
+
+  const activeSession = trainings.find(t => t.status === 'active' && trainingTargetsEmployee(t, code, employeesForTargeting));
   const myHistory = [];
   let totalClosed = 0;
   let myAttended = 0;
@@ -4605,19 +4862,41 @@ app.get('/api/trainings/worker/:empCode', authenticateSession, (req, res) => {
     
     if (me) {
       if (isClosed && me.verified !== false) myAttended++;
+      const hasQuiz = !!(trn.quiz && Array.isArray(trn.quiz.questions) && trn.quiz.questions.length > 0);
+      // هل فيه تسجيل فيديو للمحاضرة دي؟ (إضافة 15 سبتمبر 2026 — كانت
+      // موجودة في الباك إند بس مكانتش بتوصل للعامل خالص من غير ده).
+      const hasRecording = !!(trn.recording && trn.recording.url);
+      const reviewExpired = trainingReviewExpired(trn);
+      const reviewWindowDays = Number.isFinite(trn.reviewWindowDays) ? trn.reviewWindowDays : DEFAULT_REVIEW_WINDOW_DAYS;
+      const reviewDeadline = (trn.closedAt && reviewWindowDays > 0)
+        ? new Date(new Date(trn.closedAt).getTime() + reviewWindowDays * 24 * 60 * 60 * 1000).toISOString()
+        : null;
+      // لو رسب في اختبار المحاضرة، الحالة توضح ده تحديدًا بدل "قيد المراجعة"
+      // العامة (إضافة 15 سبتمبر 2026 — نظام الفيديو/الاختبار).
+      let statusLabel = me.verified === false ? '⏳ قيد المراجعة' : '✅ مؤكد';
+      if (me.verified === false && me.quizFailed) {
+        statusLabel = `❌ رسب في اختبار المحاضرة (${me.quizScore ?? 0}%)`;
+      }
       myHistory.push({
         date: trn.date || trn.createdAt,
         title: trn.title || trn.topic,
-        status: me.verified === false ? '⏳ قيد المراجعة' : '✅ مؤكد',
+        status: statusLabel,
         verified: me.verified !== false,
-        attended: true
+        attended: true,
+        trainingId: trn.id,
+        hasQuiz,
+        hasRecording,
+        recordingUrl: hasRecording ? trn.recording.url : null,
+        reviewExpired,
+        reviewDeadline,
+        quizFailed: !!me.quizFailed
       });
     }
   });
-  
+
   // Sort history newest to oldest
   myHistory.sort((a, b) => new Date(b.date) - new Date(a.date));
-  
+
   // Filter out attendees list from activeSession to protect privacy before sending to worker
   let safeActiveSession = null;
   if (activeSession) {
@@ -4625,15 +4904,167 @@ app.get('/api/trainings/worker/:empCode', authenticateSession, (req, res) => {
     // Only send if the worker themselves attended
     const meAttended = (activeSession.attendees || []).find(a => attCode(a) === code);
     safeActiveSession.attendees = meAttended ? [meAttended] : [];
+
+    // هل العامل حضر نفس موضوع المحاضرة دي قبل كده في جلسة سابقة مقفولة؟
+    // (إضافة 14 سبتمبر 2026 — عشان لو نفس المحاضرة اتكررت، العامل يعرف من
+    // غير ما يفوّت أي حاجة، مش منع من الحضور تاني).
+    const liveTopic = (activeSession.title || activeSession.topic || '').trim();
+    let attendedBeforeDate = null;
+    if (liveTopic) {
+      const prior = trainings
+        .filter(t => t.id !== activeSession.id && (t.title || t.topic || '').trim() === liveTopic)
+        .filter(t => (t.attendees || []).some(a => attCode(a) === code && a.verified !== false))
+        .sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0));
+      if (prior.length) attendedBeforeDate = prior[0].date || prior[0].createdAt || null;
+    }
+    safeActiveSession.attendedBefore = !!attendedBeforeDate;
+    safeActiveSession.attendedBeforeDate = attendedBeforeDate;
   }
 
-  res.json({ 
-    activeSession: safeActiveSession, 
-    myHistory, 
-    totalClosed, 
-    myAttended 
+  res.json({
+    activeSession: safeActiveSession,
+    myHistory,
+    totalClosed,
+    myAttended
   });
 });
+
+// ============================================================
+// 🎓 طلبات محاضرات من العمال (Training Requests)
+// ============================================================
+// إضافة 14 سبتمبر 2026 بطلب بشمهندس أحمد: عامل يقدر يطلب موضوع محاضرة
+// معيّن من قسم السلامة (بدل ما يطلبها كلام شفهي غير موثّق)، ومسؤول السلامة
+// يشوف الطلبات ويرد عليها (تحديد موعد / رفض بسبب).
+
+/** يبعت إشعار لكل الأدمنز اللي دورهم بيسمح بجدولة محاضرات (hse_admin/super_admin). */
+function notifyAdminsNewTrainingRequest(reqRecord) {
+  createNotification({
+    targetRole: 'hse_admin',
+    type: 'training_request',
+    title: '🎓 طلب محاضرة جديد',
+    message: `${reqRecord.workerName || reqRecord.empCode} طلب محاضرة: ${reqRecord.topicTitle}`,
+    link: 'tabTrainingAdmin'
+  });
+  createNotification({
+    targetRole: 'super_admin',
+    type: 'training_request',
+    title: '🎓 طلب محاضرة جديد',
+    message: `${reqRecord.workerName || reqRecord.empCode} طلب محاضرة: ${reqRecord.topicTitle}`,
+    link: 'tabTrainingAdmin'
+  });
+}
+
+// POST — عامل بيطلب محاضرة (من الموبايل بتاعه، بجلسته العادية)
+app.post('/api/training-requests', trainingRequestLimiter, authenticateSession, (req, res) => {
+  if (!req.worker) return res.status(403).json({ error: 'الخاصية دي للعمال بس' });
+  const topicTitle = sanitizeStr((req.body || {}).topicTitle, 200);
+  const note = sanitizeStr((req.body || {}).note, 500);
+  if (!topicTitle) return res.status(400).json({ error: 'اكتب اسم المحاضرة المطلوبة' });
+
+  const empCode = req.worker.empCode;
+  const employees = readEmployees();
+  const emp = employees.find(e => normalizeEmpCode(e.code || e.empCode) === normalizeEmpCode(empCode));
+
+  enqueueWrite(async () => {
+    const requests = readTrainingRequests();
+    const newReq = {
+      id: `TRQ-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      empCode: normalizeEmpCode(empCode),
+      workerName: emp ? emp.name : (req.worker.name || ''),
+      department: emp ? emp.department : '',
+      topicTitle,
+      note,
+      status: 'pending', // pending | scheduled | declined
+      responseNote: '',
+      respondedBy: '',
+      respondedAt: null,
+      createdAt: new Date().toISOString()
+    };
+    requests.push(newReq);
+    writeTrainingRequests(requests);
+    notifyAdminsNewTrainingRequest(newReq);
+    res.status(201).json({ success: true, request: newReq });
+  });
+});
+
+// GET — طلبات العامل نفسه (لعرض حالة طلباته في تابه)
+app.get('/api/training-requests/mine', authenticateSession, (req, res) => {
+  if (!req.worker) return res.status(403).json({ error: 'الخاصية دي للعمال بس' });
+  const code = normalizeEmpCode(req.worker.empCode);
+  const mine = readTrainingRequests()
+    .filter(r => r.empCode === code)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json({ requests: mine });
+});
+
+// GET — كل الطلبات (لمسؤول السلامة/المدير العام لمراجعتها)
+app.get('/api/training-requests', authenticateToken, requireRole('super_admin', 'hse_admin'), (req, res) => {
+  const requests = readTrainingRequests().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json({ requests });
+});
+
+// PATCH — الرد على طلب (تحديد موعد / رفض)
+app.patch('/api/training-requests/:id', authenticateToken, requireRole('super_admin', 'hse_admin'), (req, res) => {
+  const { status, responseNote } = req.body || {};
+  // 'completed' ("تمت") بقت حالة صالحة كمان — إضافة 15 سبتمبر 2026 — بتتحدد
+  // تلقائيًا لما تتعمل محاضرة حية بنفس عنوان الطلب (autoCompleteMatchingTrainingRequests
+  // تحت)، ومتاحة هنا كمان لو مسؤول السلامة عايز يعلّمها يدويًا.
+  if (!['scheduled', 'declined', 'pending', 'completed'].includes(status)) {
+    return res.status(400).json({ error: 'حالة غير صالحة' });
+  }
+  enqueueWrite(async () => {
+    const requests = readTrainingRequests();
+    const idx = requests.findIndex(r => r.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'الطلب غير موجود' });
+
+    requests[idx].status = status;
+    requests[idx].responseNote = sanitizeStr(responseNote, 500);
+    requests[idx].respondedBy = req.user.name || req.user.username;
+    requests[idx].respondedAt = new Date().toISOString();
+    writeTrainingRequests(requests);
+
+    const label = status === 'scheduled' ? 'هيتم جدولتها قريبًا 🗓️'
+      : status === 'completed' ? 'اتعملت فعليًا 🎉'
+      : status === 'declined' ? 'مش هينفذ حاليًا' : 'قيد المراجعة';
+    createNotification({
+      targetEmpCode: requests[idx].empCode,
+      type: 'training_request',
+      title: 'رد على طلب المحاضرة 🎓',
+      message: `طلبك لمحاضرة "${requests[idx].topicTitle}": ${label}${responseNote ? ' - ' + sanitizeStr(responseNote, 200) : ''}`,
+      link: 'tabTrainingWorker'
+    });
+
+    res.json({ success: true, request: requests[idx] });
+  });
+});
+
+/** لما تتعمل محاضرة حية بعنوان يطابق طلب محاضرة قائم (pending/scheduled)،
+ *  الطلب ده يتحول تلقائيًا لحالة "تمت" (completed) — بطلب بشمهندس أحمد
+ *  15 سبتمبر 2026 — عشان العامل يشوف إن طلبه اتنفذ فعليًا من غير ما حد
+ *  يرجعله يدويًا يقفل الطلب بعد ما ينشئ المحاضرة. */
+function autoCompleteMatchingTrainingRequests(title) {
+  const wanted = String(title || '').trim().toLowerCase();
+  if (!wanted) return;
+  enqueueWrite(async () => {
+    const requests = readTrainingRequests();
+    let changed = false;
+    requests.forEach(r => {
+      if (['pending', 'scheduled'].includes(r.status) && String(r.topicTitle || '').trim().toLowerCase() === wanted) {
+        r.status = 'completed';
+        r.respondedAt = new Date().toISOString();
+        changed = true;
+        createNotification({
+          targetEmpCode: r.empCode,
+          type: 'training_request',
+          title: 'محاضرتك اتعملت 🎉',
+          message: `طلبك لمحاضرة "${r.topicTitle}" تم تنفيذه — المحاضرة اتعملت فعليًا.`,
+          link: 'tabTrainingWorker'
+        });
+      }
+    });
+    if (changed) writeTrainingRequests(requests);
+  });
+}
 
 // ── NEW ROUTE: Upload Trainings Excel ──────────────────────────────
 app.post('/api/trainings/upload-excel', authenticateToken, requireRole('super_admin', 'hse_admin'), async (req, res) => {
@@ -4767,10 +5198,33 @@ app.post('/api/trainings/upload-excel', authenticateToken, requireRole('super_ad
 
 
 app.post('/api/trainings', authenticateToken, requireRole('super_admin', 'hse_admin'), async (req, res) => {
-  const { title, targetGroup, location, date, startTime, endTime, sessionPin, trainer, trainerCode } = req.body;
+  const { title, location, date, startTime, endTime, sessionPin, trainer, trainerCode } = req.body;
   if (!title || !date || !startTime || !endTime || !sessionPin) {
     return res.status(400).json({ error: 'البيانات الأساسية مطلوبة' });
   }
+
+  // ── الفئة المستهدفة الحقيقية (إضافة 15 سبتمبر 2026) ────────────────────
+  // قبل كده كان الحقل ده نص حر ("targetGroup") بلا أي تأثير فعلي. دلوقتي
+  // بيتحدد بوضع (mode) واضح: الجميع / قسم معيّن / عمال محددين بالكود،
+  // وده اللي بيستخدمه trainingTargetsEmployee() فوق فعليًا في التحكم في
+  // مين اللي يشوف المحاضرة كـ"جارية الآن" ومين يقدر يسجل حضوره فيها.
+  let targetMode = String(req.body.targetMode || 'all').trim();
+  if (!['all', 'department', 'workers'].includes(targetMode)) targetMode = 'all';
+  let targetDept = '';
+  let targetEmpCodes = [];
+  if (targetMode === 'department') {
+    targetDept = sanitizeStr(req.body.targetDept || '', 150);
+    if (!targetDept) return res.status(400).json({ error: 'اختر القسم المستهدف' });
+  } else if (targetMode === 'workers') {
+    const rawCodes = Array.isArray(req.body.targetEmpCodes)
+      ? req.body.targetEmpCodes
+      : String(req.body.targetEmpCodes || '').split(/[,\s]+/);
+    targetEmpCodes = Array.from(new Set(rawCodes.map(c => normalizeEmpCode(c)).filter(Boolean))).slice(0, 500);
+    if (!targetEmpCodes.length) return res.status(400).json({ error: 'اكتب كود أو أكواد العمال المستهدفين' });
+  }
+  const targetGroup = targetMode === 'all' ? 'الجميع'
+    : targetMode === 'department' ? targetDept
+    : (targetEmpCodes.length === 1 ? `عامل بالكود ${targetEmpCodes[0]}` : `${targetEmpCodes.length} عمال محددين`);
 
   let result;
   await enqueueWrite(async () => {
@@ -4782,7 +5236,10 @@ app.post('/api/trainings', authenticateToken, requireRole('super_admin', 'hse_ad
       topic: sanitizeStr(title, 200),
       trainer: sanitizeStr(trainer || '', 150),
       trainerCode: sanitizeStr(trainerCode || '', 50),
-      targetGroup: sanitizeStr(targetGroup || '', 200),
+      targetMode,
+      targetDept: targetDept || null,
+      targetEmpCodes,
+      targetGroup: sanitizeStr(targetGroup, 200),
       location: sanitizeStr(location || '', 200),
       date: sanitizeStr(date, 20),
       startTime: sanitizeStr(startTime, 10),
@@ -4794,15 +5251,41 @@ app.post('/api/trainings', authenticateToken, requireRole('super_admin', 'hse_ad
     };
     trainings.push(newTraining);
     if (writeTrainings(trainings)) {
-      
-      createNotification({
-        targetRole: 'worker',
-        targetGroup: newTraining.targetGroup,
-        type: 'training',
-        title: 'محاضرة تدريبية جديدة 🎓',
-        message: `محاضرة جديدة: ${newTraining.title} في ${newTraining.location || 'غير محدد'} - الساعة ${newTraining.startTime}`,
-        link: 'tabTrainingWorker'
-      });
+
+      const notifMsg = `محاضرة جديدة: ${newTraining.title} في ${newTraining.location || 'غير محدد'} - الساعة ${newTraining.startTime}`;
+      if (targetMode === 'workers') {
+        // إشعار مباشر لكل عامل مستهدف بالكود بس (targetEmpCode فعليًا شغال ومفلتر).
+        targetEmpCodes.forEach(code => {
+          createNotification({
+            targetEmpCode: code,
+            type: 'training',
+            title: 'محاضرة تدريبية جديدة 🎓',
+            message: notifMsg,
+            link: 'tabTrainingWorker'
+          });
+        });
+      } else if (targetMode === 'department') {
+        createNotification({
+          targetRole: 'worker',
+          targetDept: newTraining.targetDept,
+          type: 'training',
+          title: 'محاضرة تدريبية جديدة 🎓',
+          message: notifMsg,
+          link: 'tabTrainingWorker'
+        });
+      } else {
+        createNotification({
+          targetRole: 'worker',
+          type: 'training',
+          title: 'محاضرة تدريبية جديدة 🎓',
+          message: notifMsg,
+          link: 'tabTrainingWorker'
+        });
+      }
+
+      // لو في طلب/طلبات محاضرات (من العمال) بنفس عنوان المحاضرة دي، حوّلها
+      // تلقائيًا لحالة "تمت" — بطلب بشمهندس أحمد 15 سبتمبر 2026.
+      autoCompleteMatchingTrainingRequests(newTraining.title);
 
       result = { status: 201, body: { success: true, training: newTraining } };
     } else {
@@ -4820,8 +5303,9 @@ app.put('/api/trainings/:id/close', authenticateToken, requireRole('super_admin'
     if (idx === -1) return result = { status: 404, body: { error: 'المحاضرة غير موجودة' } };
     
     trainings[idx].status = 'closed';
+    trainings[idx].closedAt = new Date().toISOString();
     if (writeTrainings(trainings)) {
-      
+
       createNotification({
         targetRole: 'admin',
         type: 'training',
@@ -4939,6 +5423,14 @@ app.post('/api/trainings/:id/attend', attendLimiter, authenticateSession, async 
       return result = { status: 404, body: { error: 'الكود الوظيفي غير مسجل في النظام' } };
     }
 
+    // منع أي عامل خارج الفئة المستهدفة من تسجيل حضوره حتى لو حصل على الـ PIN
+    // بأي شكل (إضافة 15 سبتمبر 2026 — جزء من تفعيل "الفئة المستهدفة" فعليًا).
+    // ملحوظة: القيد ده على تسجيل الحضور الذاتي بس؛ إضافة الحضور اليدوية من
+    // الأدمن (add-attendee تحت) فيها سلطة تقديرية وبتفضل شغالة لأي حد.
+    if (!trainingTargetsEmployee(trn, nCode, employees)) {
+      return result = { status: 403, body: { error: 'هذه المحاضرة موجّهة لقسم أو مجموعة عمال محددة، وحسابك غير مستهدف بها' } };
+    }
+
     trn.attendees.push({
       empCode: nCode,
       name: emp.name,
@@ -5053,6 +5545,346 @@ app.put('/api/trainings/:id/verify-attendee', authenticateToken, requireRole('su
       result = { status: 200, body: { success: true, attendees: trn.attendees } };
     } else {
       result = { status: 500, body: { error: 'فشل تحديث الحضور' } };
+    }
+  });
+  res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
+});
+
+// ============================================================
+// 🎥📝 تسجيل المحاضرة (فيديو) + الاختبار (Quiz) — إضافة 15 سبتمبر 2026
+// تحديث 15 سبتمبر 2026 (نفس اليوم، دفعة تانية): رفع الفيديو بقى بث مباشر
+// (streaming) على القرص بدل base64 جوه جسم الطلب، وضفنا "مدة مراجعة"
+// (reviewWindowDays) بعد قفل المحاضرة — بطلب بشمهندس أحمد بعد ما لاحظ إن
+// الاختبار كان بيفضل شغال للأبد بعد قفل المحاضرة، بينما التسجيل مكانش
+// بيوصل للعامل خالص أصلاً (الميزة كانت ناقصة من واجهة العامل، مش إنها
+// بتتقفل). دلوقتي الاتنين بيتحكم فيهم بنفس المهلة دي، وقابلة للتعديل لكل
+// محاضرة على حدة (0 = بدون حد).
+// ============================================================
+// بطلب بشمهندس أحمد: مسؤول السلامة يرفع تسجيل المحاضرة ويحط اختبار عليها،
+// وحد نسبة نجاح، والعامل اللي مايجيبش النسبة دي حضوره يتلغي (verified:false)،
+// والاختبار مرة واحدة بس لكل عامل افتراضيًا إلا لو السيفتي فتحه تاني
+// (للكل، أو لعدد مرات معيّن، أو لشخص واحد بالتحديد).
+//
+// ملحوظة مهمة (صدق مع بشمهندس أحمد، مش تفصيلة تقنية بس): الرفع المباشر
+// بقى بيتبعت كبث خام (raw stream) لملف على القرص، مش base64 جوه JSON —
+// ده معناه إنه مبيتحملش في ذاكرة السيرفر كله مرة واحدة، فبيتحمل حجم أكبر
+// بكتير (لحد ~1.5 جيجا، انظر MAX_RECORDING_UPLOAD_BYTES) من غير ما يهدد
+// استقرار السيرفر زي ما كان هيحصل لو حاولنا نعمل نفس الحجم ده بـ base64.
+// لكن السيرفر لسه مستضاف على Railway من غير persistent volume حسب كلامك
+// قبل كده — أي ملف يتخزن على القرص (فيديو تسجيل، أو حتى صور البلاغات
+// الموجودة أصلاً) ممكن يضيع لو السيرفر عمل ريستارت/إعادة نشر من غير
+// Volume متفعّل، وكل ما الملفات تكبر كل ما الخسارة المحتملة أكبر. لازم
+// تتأكد من تفعيل Volume على data/ و public/uploads قبل ما تعتمد على رفع
+// فيديوهات كبيرة في الإنتاج — رفع رابط خارجي (يوتيوب غير مُدرج/Google
+// Drive) لسه أأمن حل لتسجيلات مهمة لحد ما الـ Volume يتفعّل.
+const MAX_RECORDING_UPLOAD_BYTES = 1536 * 1024 * 1024; // ~1.5GB (بث مباشر على القرص، مش في الذاكرة)
+const DEFAULT_REVIEW_WINDOW_DAYS = 30; // افتراضي: شهر كامل بعد قفل المحاضرة، قابل للتعديل لكل محاضرة
+
+/** هل انتهت مدة إتاحة مراجعة التسجيل/الاختبار لهذه المحاضرة؟ لو لسه مقفولة (مفيش closedAt) أو المهلة 0 (بدون حد)، الإجابة لأ دايمًا. */
+function trainingReviewExpired(trn) {
+  if (!trn || !trn.closedAt) return false;
+  const days = Number.isFinite(trn.reviewWindowDays) ? trn.reviewWindowDays : DEFAULT_REVIEW_WINDOW_DAYS;
+  if (!days || days <= 0) return false;
+  const deadline = new Date(trn.closedAt).getTime() + days * 24 * 60 * 60 * 1000;
+  return Date.now() > deadline;
+}
+
+app.post('/api/trainings/:id/recording', authenticateToken, requireRole('super_admin', 'hse_admin'), async (req, res) => {
+  const { videoUrl } = req.body || {};
+  if (!videoUrl || !String(videoUrl).trim()) {
+    return res.status(400).json({ error: 'حط رابط الفيديو (لرفع ملف مباشر استخدم /recording/upload)' });
+  }
+  const url = String(videoUrl).trim();
+  if (!/^https:\/\/[^\s]+$/.test(url) || url.length > 2000) {
+    return res.status(400).json({ error: 'رابط الفيديو لازم يكون رابط https صالح' });
+  }
+
+  let result;
+  await enqueueWrite(async () => {
+    const trainings = readTrainings();
+    const idx = trainings.findIndex(t => t.id === req.params.id);
+    if (idx === -1) return result = { status: 404, body: { error: 'المحاضرة غير موجودة' } };
+    trainings[idx].recording = {
+      url,
+      addedAt: new Date().toISOString(),
+      addedBy: sanitizeStr(req.user.name || req.user.username, 100)
+    };
+    if (writeTrainings(trainings)) {
+      result = { status: 200, body: { success: true, recording: trainings[idx].recording } };
+    } else {
+      result = { status: 500, body: { error: 'فشل حفظ التسجيل' } };
+    }
+  });
+  res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
+});
+
+// رفع ملف فيديو مباشر كبث خام (streaming) — بيتكتب على القرص أول بأول من
+// غير ما يتحمّل في ذاكرة السيرفر كله مرة واحدة، عشان يتحمّل أحجام أكبر
+// بكتير من الـ base64 القديم (انظر الملحوظة فوق). الفرونت إند بيبعته بـ
+// fetch/XHR بجسم الملف الخام (مش JSON)، والامتداد بييجي في ?ext=.
+app.post('/api/trainings/:id/recording/upload', authenticateToken, requireRole('super_admin', 'hse_admin'), (req, res) => {
+  const trainings = readTrainings();
+  const trn = trainings.find(t => t.id === req.params.id);
+  if (!trn) return res.status(404).json({ error: 'المحاضرة غير موجودة' });
+
+  const extRaw = String(req.query.ext || 'mp4').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const ext = /^(mp4|webm|mov|mkv|avi|m4v)$/.test(extRaw) ? extRaw : 'mp4';
+  const filename = `TRNREC-${Date.now()}-${Math.floor(Math.random() * 1000)}.${ext}`;
+  const filepath = path.join(TRAINING_UPLOADS_DIR, filename);
+  const writeStream = fs.createWriteStream(filepath);
+
+  let received = 0;
+  let failed = false;
+  const cleanupAndFail = (status, error) => {
+    if (failed) return;
+    failed = true;
+    try { writeStream.destroy(); } catch (e) { /* ignore */ }
+    fs.unlink(filepath, () => {});
+    if (!res.headersSent) res.status(status).json({ error });
+  };
+
+  req.on('data', (chunk) => {
+    received += chunk.length;
+    if (received > MAX_RECORDING_UPLOAD_BYTES) {
+      cleanupAndFail(413, 'حجم الفيديو أكبر من الحد المسموح (~1.5 جيجا) — استخدم رابط فيديو خارجي بدل كده');
+      req.destroy();
+    }
+  });
+  req.on('error', () => cleanupAndFail(500, 'حصل خطأ أثناء استقبال الفيديو، حاول تاني'));
+  writeStream.on('error', (err) => {
+    console.error('Error writing training recording stream:', err);
+    cleanupAndFail(500, 'فشل حفظ ملف الفيديو على السيرفر');
+  });
+
+  writeStream.on('finish', async () => {
+    if (failed) return;
+    const finalUrl = `/uploads/trainings/${filename}`;
+    let result;
+    await enqueueWrite(async () => {
+      const list = readTrainings();
+      const idx = list.findIndex(t => t.id === req.params.id);
+      if (idx === -1) return result = { status: 404, body: { error: 'المحاضرة غير موجودة' } };
+      list[idx].recording = {
+        url: finalUrl,
+        addedAt: new Date().toISOString(),
+        addedBy: sanitizeStr(req.user.name || req.user.username, 100)
+      };
+      if (writeTrainings(list)) {
+        result = { status: 200, body: { success: true, recording: list[idx].recording } };
+      } else {
+        result = { status: 500, body: { error: 'فشل حفظ بيانات التسجيل' } };
+      }
+    });
+    res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
+  });
+
+  req.pipe(writeStream);
+});
+
+// تحديد/تعديل مدة إتاحة مراجعة التسجيل والاختبار للعامل بعد قفل المحاضرة
+// (بالأيام) — 0 يعني بدون حد إطلاقًا.
+app.put('/api/trainings/:id/review-window', authenticateToken, requireRole('super_admin', 'hse_admin'), async (req, res) => {
+  const days = clampInt(req.body && req.body.days, 0, 365, DEFAULT_REVIEW_WINDOW_DAYS);
+  let result;
+  await enqueueWrite(async () => {
+    const trainings = readTrainings();
+    const idx = trainings.findIndex(t => t.id === req.params.id);
+    if (idx === -1) return result = { status: 404, body: { error: 'المحاضرة غير موجودة' } };
+    trainings[idx].reviewWindowDays = days;
+    if (writeTrainings(trainings)) {
+      result = { status: 200, body: { success: true, reviewWindowDays: days } };
+    } else {
+      result = { status: 500, body: { error: 'فشل الحفظ' } };
+    }
+  });
+  res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
+});
+
+// إنشاء/استبدال اختبار المحاضرة — بيستبدل الأسئلة بالكامل لو اتبعتت تاني
+// (تعديل الاختبار)، من غير ما يمسح محاولات العمال السابقة (attempts).
+app.post('/api/trainings/:id/quiz', authenticateToken, requireRole('super_admin', 'hse_admin'), async (req, res) => {
+  const { passThreshold, questions } = req.body || {};
+  const threshold = clampInt(passThreshold, 0, 100, 70);
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return res.status(400).json({ error: 'ضيف سؤال واحد على الأقل' });
+  }
+  const cleanQuestions = [];
+  for (const q of questions) {
+    const text = sanitizeStr(q && q.text, 500);
+    const options = Array.isArray(q && q.options) ? q.options.map(o => sanitizeStr(o, 200)).filter(Boolean) : [];
+    const correctIndex = Number.isInteger(q && q.correctIndex) ? q.correctIndex : parseInt(q && q.correctIndex, 10);
+    if (!text || options.length < 2 || !(correctIndex >= 0 && correctIndex < options.length)) {
+      return res.status(400).json({ error: 'كل سؤال لازم يكون له نص، خيارين على الأقل، وإجابة صحيحة محددة' });
+    }
+    cleanQuestions.push({ id: `Q-${Date.now()}-${Math.floor(Math.random() * 10000)}`, text, options, correctIndex });
+  }
+
+  let result;
+  await enqueueWrite(async () => {
+    const trainings = readTrainings();
+    const idx = trainings.findIndex(t => t.id === req.params.id);
+    if (idx === -1) return result = { status: 404, body: { error: 'المحاضرة غير موجودة' } };
+    const existingAttempts = (trainings[idx].quiz && trainings[idx].quiz.attempts) || {};
+    trainings[idx].quiz = {
+      passThreshold: threshold,
+      questions: cleanQuestions,
+      allowedAttempts: (trainings[idx].quiz && trainings[idx].quiz.allowedAttempts) || 1,
+      perWorkerExtraAttempts: (trainings[idx].quiz && trainings[idx].quiz.perWorkerExtraAttempts) || {},
+      attempts: existingAttempts,
+      createdBy: sanitizeStr(req.user.name || req.user.username, 100),
+      updatedAt: new Date().toISOString()
+    };
+    if (writeTrainings(trainings)) {
+      result = { status: 200, body: { success: true, quiz: trainings[idx].quiz } };
+    } else {
+      result = { status: 500, body: { error: 'فشل حفظ الاختبار' } };
+    }
+  });
+  res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
+});
+
+/** عدد المحاولات المسموح بها فعليًا لعامل معيّن = العدد العام + أي محاولات إضافية اتفتحت له شخصيًا. */
+function effectiveAllowedAttempts(quiz, empCode) {
+  const base = (quiz && quiz.allowedAttempts) || 1;
+  const extra = (quiz && quiz.perWorkerExtraAttempts && quiz.perWorkerExtraAttempts[normalizeEmpCode(empCode)]) || 0;
+  return base + extra;
+}
+
+// العامل بيجيب أسئلة الاختبار (من غير الإجابة الصحيحة) + حالة محاولاته.
+app.get('/api/trainings/:id/quiz', authenticateSession, (req, res) => {
+  if (!req.worker) return res.status(403).json({ error: 'الخاصية دي للعمال بس' });
+  const trainings = readTrainings();
+  const trn = trainings.find(t => t.id === req.params.id);
+  if (!trn) return res.status(404).json({ error: 'المحاضرة غير موجودة' });
+  if (!trn.quiz || !Array.isArray(trn.quiz.questions) || trn.quiz.questions.length === 0) {
+    return res.status(404).json({ error: 'لا يوجد اختبار على هذه المحاضرة' });
+  }
+  if (trainingReviewExpired(trn)) {
+    return res.status(403).json({ error: 'انتهت مدة إتاحة هذا الاختبار للمراجعة', reviewExpired: true });
+  }
+  const code = normalizeEmpCode(req.worker.empCode);
+  const myAttempt = (trn.quiz.attempts && trn.quiz.attempts[code]) || null;
+  const allowed = effectiveAllowedAttempts(trn.quiz, code);
+  const used = (myAttempt && myAttempt.usedAttempts) || 0;
+  res.json({
+    passThreshold: trn.quiz.passThreshold,
+    questions: trn.quiz.questions.map(q => ({ id: q.id, text: q.text, options: q.options })),
+    myAttempt: myAttempt ? { usedAttempts: used, lastScore: myAttempt.lastScore, passed: myAttempt.passed } : null,
+    canAttempt: used < allowed,
+    remainingAttempts: Math.max(0, allowed - used)
+  });
+});
+
+// تسليم إجابات الاختبار — تصحيح على السيرفر، وتحديث حالة تأكيد الحضور
+// حسب النتيجة مقارنةً بحد النجاح.
+app.post('/api/trainings/:id/quiz/submit', authenticateSession, async (req, res) => {
+  if (!req.worker) return res.status(403).json({ error: 'الخاصية دي للعمال بس' });
+  const { answers } = req.body || {};
+  if (!Array.isArray(answers)) return res.status(400).json({ error: 'إجابات غير صالحة' });
+
+  const code = normalizeEmpCode(req.worker.empCode);
+  let result;
+  await enqueueWrite(async () => {
+    const trainings = readTrainings();
+    const idx = trainings.findIndex(t => t.id === req.params.id);
+    if (idx === -1) return result = { status: 404, body: { error: 'المحاضرة غير موجودة' } };
+    const trn = trainings[idx];
+    if (!trn.quiz || !Array.isArray(trn.quiz.questions) || trn.quiz.questions.length === 0) {
+      return result = { status: 404, body: { error: 'لا يوجد اختبار على هذه المحاضرة' } };
+    }
+    if (trainingReviewExpired(trn)) {
+      return result = { status: 403, body: { error: 'انتهت مدة إتاحة هذا الاختبار للمراجعة', reviewExpired: true } };
+    }
+    if (!trn.attendees.find(a => a.empCode === code)) {
+      return result = { status: 403, body: { error: 'لازم تسجل حضورك في المحاضرة الأول قبل ما تاخد الاختبار' } };
+    }
+
+    trn.quiz.attempts = trn.quiz.attempts || {};
+    const prevAttempt = trn.quiz.attempts[code];
+    const allowed = effectiveAllowedAttempts(trn.quiz, code);
+    const usedSoFar = (prevAttempt && prevAttempt.usedAttempts) || 0;
+    if (usedSoFar >= allowed) {
+      return result = { status: 403, body: { error: 'استنفدت عدد محاولات الاختبار المسموح بها. اطلب من مسؤول السلامة يفتحها لك تاني' } };
+    }
+
+    let correctCount = 0;
+    trn.quiz.questions.forEach((q, i) => {
+      if (Number(answers[i]) === q.correctIndex) correctCount++;
+    });
+    const score = Math.round((correctCount / trn.quiz.questions.length) * 100);
+    const passed = score >= trn.quiz.passThreshold;
+
+    trn.quiz.attempts[code] = {
+      usedAttempts: usedSoFar + 1,
+      lastScore: score,
+      passed,
+      answeredAt: new Date().toISOString()
+    };
+
+    // العامل اللي مايجيبش النسبة المطلوبة، حضوره يتلغي (غير مؤكد) — بطلب
+    // بشمهندس أحمد. لو نجح بعد إعادة محاولة (بعد ما السيفتي فتحها له)،
+    // حضوره يتأكد تاني.
+    const attendee = trn.attendees.find(a => a.empCode === code);
+    if (attendee) {
+      attendee.verified = passed;
+      attendee.quizFailed = !passed;
+      attendee.quizScore = score;
+    }
+
+    if (writeTrainings(trainings)) {
+      if (!passed) {
+        createNotification({
+          targetEmpCode: code,
+          type: 'training',
+          title: 'نتيجة اختبار المحاضرة ❌',
+          message: `للأسف حصلت على ${score}% في اختبار "${trn.title}" (المطلوب ${trn.quiz.passThreshold}%) — تم إلغاء تأكيد حضورك لحد ما تعيد الاختبار.`,
+          link: 'tabTrainingWorker'
+        });
+      }
+      result = { status: 200, body: { success: true, score, passed, passThreshold: trn.quiz.passThreshold } };
+    } else {
+      result = { status: 500, body: { error: 'فشل حفظ نتيجة الاختبار' } };
+    }
+  });
+  res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
+});
+
+// إعادة فتح الاختبار — للكل / لعدد مرات معيّن / لشخص واحد بالتحديد.
+app.post('/api/trainings/:id/quiz/reopen', authenticateToken, requireRole('super_admin', 'hse_admin'), async (req, res) => {
+  const { scope, empCode, times } = req.body || {};
+  const n = Math.max(1, Math.min(20, parseInt(times, 10) || 1));
+  if (!['all', 'worker'].includes(scope)) return res.status(400).json({ error: 'نوع إعادة الفتح غير صالح' });
+  if (scope === 'worker' && !empCode) return res.status(400).json({ error: 'اكتب كود العامل' });
+
+  let result;
+  await enqueueWrite(async () => {
+    const trainings = readTrainings();
+    const idx = trainings.findIndex(t => t.id === req.params.id);
+    if (idx === -1) return result = { status: 404, body: { error: 'المحاضرة غير موجودة' } };
+    const trn = trainings[idx];
+    if (!trn.quiz) return result = { status: 404, body: { error: 'لا يوجد اختبار على هذه المحاضرة' } };
+
+    if (scope === 'all') {
+      // فتح للكل: زيادة عدد المحاولات العام بعدد المرات المطلوبة — أي عامل
+      // مستنفد محاولاته هيقدر يحاول تاني n مرة إضافية.
+      trn.quiz.allowedAttempts = (trn.quiz.allowedAttempts || 1) + n;
+    } else {
+      const nCode = normalizeEmpCode(empCode);
+      trn.quiz.perWorkerExtraAttempts = trn.quiz.perWorkerExtraAttempts || {};
+      trn.quiz.perWorkerExtraAttempts[nCode] = (trn.quiz.perWorkerExtraAttempts[nCode] || 0) + n;
+      createNotification({
+        targetEmpCode: nCode,
+        type: 'training',
+        title: 'اتفتحلك الاختبار تاني 🔓',
+        message: `مسؤول السلامة فتحلك محاولة إضافية في اختبار محاضرة "${trn.title}"`,
+        link: 'tabTrainingWorker'
+      });
+    }
+
+    if (writeTrainings(trainings)) {
+      result = { status: 200, body: { success: true, quiz: trn.quiz } };
+    } else {
+      result = { status: 500, body: { error: 'فشل تحديث الاختبار' } };
     }
   });
   res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
@@ -6803,10 +7635,25 @@ app.post('/api/penalties/upload-excel', authenticateToken, requireRole('super_ad
 
 // الهوية من الجلسة نفسها — قبل كده كانت من الرابط (?role=super_admin) فأي حد
 // كان يقدر يقرأ كل الإشعارات.
+/** يرجّع قسم العامل من ملف الموظفين — كان targetDept بيتقارن بقسم فاضي دايمًا
+ *  للعمال (لأن req.user.department مش موجودة أصلاً لحساب عامل)، يعني أي
+ *  إشعار موجّه لقسم معيّن (زي محاضرة مستهدفة لقسم) ما كانش ممكن يوصل لأي
+ *  عامل خالص. إضافة 15 سبتمبر 2026. */
+function getWorkerDepartment(empCode) {
+  if (!empCode) return '';
+  const emp = readEmployees().find(e => normalizeEmpCode(e.code || e.empCode || e.id) === normalizeEmpCode(empCode));
+  return emp ? String(emp.department || '').trim() : '';
+}
+
 app.get('/api/notifications', authenticateSession, (req, res) => {
   const role = req.worker ? 'worker' : req.user.role;
   const empCode = req.worker ? req.worker.empCode : '';
-  const department = req.worker ? '' : (req.user.department || '');
+  const department = req.worker ? getWorkerDepartment(empCode) : (req.user.department || '');
+  // حسابات المتابعة العليا (CEO/HSE Director) ما تشوفش أي إشعار إطلاقًا —
+  // بطلب بشمهندس أحمد 13 سبتمبر 2026، حتى لو الإشعار موجّه لـ targetRole:'all'.
+  if (VIEWER_ROLES.includes(role)) {
+    return res.json({ notifications: [] });
+  }
   const notifications = readNotifications();
   
   // Filter notifications based on role or empCode
@@ -6824,7 +7671,7 @@ app.get('/api/notifications', authenticateSession, (req, res) => {
       (n.targetRole === 'maint_admin' && role === 'dept_admin')
     );
     if (roleMatches) {
-      if (n.targetDept) return n.targetDept === department;
+      if (n.targetDept) return String(n.targetDept).trim().toLowerCase() === String(department).trim().toLowerCase();
       return true;
     }
     return false;
@@ -6841,7 +7688,7 @@ function markNotificationsRead(req, id) {
   const identifier = req.worker ? req.worker.empCode : req.user.role;
   const role = req.worker ? 'worker' : req.user.role;
   const empCode = req.worker ? req.worker.empCode : '';
-  const department = req.worker ? '' : (req.user.department || '');
+  const department = req.worker ? getWorkerDepartment(empCode) : (req.user.department || '');
   enqueueWrite(async () => {
     const notifications = readNotifications();
     let changed = false;
@@ -6855,9 +7702,15 @@ function markNotificationsRead(req, id) {
         const sameRole = n.targetRole === role
           || (n.targetRole === 'dept_admin' && role === 'maint_admin')
           || (n.targetRole === 'maint_admin' && role === 'dept_admin');
-        if (sameRole && (!n.targetDept || n.targetDept === department)) canRead = true;
+        if (sameRole && (!n.targetDept || String(n.targetDept).trim().toLowerCase() === String(department).trim().toLowerCase())) canRead = true;
       }
-      if (n.targetRole === 'worker' && role === 'worker') canRead = true;
+      // إشعار عام لكل العمال (بلا targetEmpCode ولا targetDept) — أي عامل
+      // يقدر يعلّمه مقروء. لو مقصور على كود أو قسم معيّن، لازم يتطابق فعليًا
+      // (كان قبل كده أي عامل يقدر "يعلّم كمقروء" إشعار أصلاً ماوصلوش —
+      // إضافة 15 سبتمبر 2026).
+      if (n.targetRole === 'worker' && role === 'worker' && !n.targetEmpCode && !n.targetDept) canRead = true;
+      if (n.targetRole === 'worker' && role === 'worker' && n.targetDept &&
+          String(n.targetDept).trim().toLowerCase() === String(department).trim().toLowerCase()) canRead = true;
       if (canRead) {
         n.readBy = n.readBy || [];
         n.readBy.push(identifier);
@@ -6950,6 +7803,11 @@ app.post('/api/notifications/subscribe', authenticateSession, (req, res) => {
   const { subscription } = req.body || {};
   const role = req.worker ? 'worker' : req.user.role;
   const empCode = req.worker ? req.worker.empCode : '';
+  // حسابات المتابعة العليا (CEO/HSE Director) ما تسجّلش اشتراك Push أصلاً —
+  // بطلب بشمهندس أحمد 13 سبتمبر 2026 (نفس استثناء الإشعارات في كل مكان تاني).
+  if (VIEWER_ROLES.includes(role)) {
+    return res.status(200).json({ success: true, skipped: true });
+  }
   // السيرفر بيبعت POST لعنوان الـ endpoint ده مع كل إشعار — لازم يكون https
   // حقيقي (مش عنوان داخلي على الشبكة).
   const endpoint = subscription && subscription.endpoint;
@@ -8704,6 +9562,9 @@ function chatbotData() {
     inspectionSections: () => inspectionSectionsStore.read() || [],
     inspectionItems: () => inspectionItemsStore.read() || [],
     inspectionRecords: () => inspectionRecordsStore.read() || [],
+    // إضافة 15 سبتمبر 2026 — عشان الشات بوت يقدر يرد على "طلبات المحاضرات
+    // بتاعتي" (بياناتي) وأي إحصائيات إدارية عليها مستقبلًا.
+    trainingRequests: readTrainingRequests,
   };
 }
 
@@ -8849,8 +9710,25 @@ function runProactiveChecks() {
       if (!isOpen) return;
       const submitted = new Date(h.submittedAt || h.createdAt || 0).getTime();
       if (submitted && (now - submitted) > HOURS_48) {
-        h.whatsappStaleAlertSent = true;
+        h.whatsappStaleAlertSent = true; // الاسم قديم من وقت ما كان واتساب بس، دلوقتي بيبوّب على القناتين
         hazardsChanged = true;
+        // إشعار داخل التطبيق دايمًا (بغض النظر عن حالة تفعيل واتساب) — إضافة
+        // 13 سبتمبر 2026 عشان التذكير ده كان قبل كده مقفول بالكامل لو واتساب
+        // مش مفعّل، ومفيش أي أثر تاني ليه في النظام.
+        createNotification({
+          targetRole: 'hse_admin',
+          type: 'hazard',
+          title: '⏰ بلاغ خطورة متأخر',
+          message: `البلاغ ${h.id} (${h.department || '—'}) لسه مفتوح من غير رد من أكتر من 48 ساعة.`,
+          link: 'tabSupHazard'
+        });
+        createNotification({
+          targetRole: 'super_admin',
+          type: 'hazard',
+          title: '⏰ بلاغ خطورة متأخر',
+          message: `البلاغ ${h.id} (${h.department || '—'}) لسه مفتوح من غير رد من أكتر من 48 ساعة.`,
+          link: 'tabSupHazard'
+        });
         if (whatsapp.isConfigured()) {
           const users = getAppUsersSync().filter(u => u.phone && ['super_admin', 'hse_admin'].includes(u.role));
           users.forEach(u => whatsapp.sendText(u.phone, `⏰ تذكير: البلاغ ${h.id} (${h.department || '—'}) لسه مفتوح من غير رد من أكتر من 48 ساعة.`).catch(() => {}));
@@ -8867,9 +9745,21 @@ function runProactiveChecks() {
       if (t.deletedAt || t.whatsappExpiryAlertSent || !t.expiresAt) return;
       const exp = new Date(t.expiresAt).getTime();
       if (exp && exp > now && exp <= inSevenDays) {
-        t.whatsappExpiryAlertSent = true;
+        t.whatsappExpiryAlertSent = true; // نفس ملحوظة الاسم فوق — بيبوّب دلوقتي على القناتين
         (t.attendees || []).forEach(a => {
-          const emp = employees.find(e => normalizeEmpCode(e.code || e.empCode) === normalizeEmpCode(a.empCode || a.code));
+          const attendeeCode = a.empCode || a.code;
+          // إشعار داخل التطبيق دايمًا لصاحب الشهادة (إضافة 13 سبتمبر 2026 —
+          // نفس سبب إضافة إشعار البلاغ المتأخر فوق).
+          if (attendeeCode) {
+            createNotification({
+              targetEmpCode: attendeeCode,
+              type: 'training',
+              title: '⏰ شهادة قريبة الانتهاء',
+              message: `شهادة "${t.title || t.topic || 'تدريب'}" هتنتهي خلال أيام قليلة.`,
+              link: 'tabTrainingWorker'
+            });
+          }
+          const emp = employees.find(e => normalizeEmpCode(e.code || e.empCode) === normalizeEmpCode(attendeeCode));
           if (emp && emp.phone && whatsapp.isConfigured()) {
             whatsapp.sendText(emp.phone, `⏰ تذكير: شهادة "${t.title || t.topic || 'تدريب'}" هتنتهي خلال أيام قليلة.`).catch(() => {});
           }

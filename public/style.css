@@ -1456,6 +1456,37 @@ select {
 }
 
 /* ── Breakpoint: Small phones (≤360px) ─────────────── */
+/* ── صندوق إدخال رمز حضور المحاضرة (PIN) ────────────────────────
+   إضافة 14 سبتمبر 2026: كان مكتوب بـ inline style ثابت (font-size:18px)
+   بيبقي ضخم جدًا على بعض شاشات الموبايل. هنا نعمل حجم معقول ومتجاوب،
+   و16px بالظبط لأي عنصر إدخال بيمنع الزوم التلقائي اللي بيعمله Safari/iOS
+   لو الخط أصغر من 16px عند فتح الكيبورد. */
+.pin-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+.pin-input {
+  flex: 1 1 140px;
+  min-width: 0;
+  font-size: 16px;
+  letter-spacing: 3px;
+  text-align: center;
+  font-weight: 700;
+  padding: 10px 12px;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.pin-row-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 @media (max-width:360px) {
   .row2 {
     grid-template-columns: 1fr;
@@ -1476,6 +1507,21 @@ select {
   }
 
   .act-btn {
+    width: 100%;
+  }
+
+  /* شاشات ضيقة جدًا: رمز الحضور وزرار التسجيل ينزلوا تحت بعض بدل ما
+     يتزنقوا جنب بعض في صف واحد */
+  .pin-row {
+    flex-direction: column;
+  }
+
+  .pin-input {
+    font-size: 15px;
+    letter-spacing: 2px;
+  }
+
+  .pin-row-btn {
     width: 100%;
   }
 }
@@ -6241,6 +6287,249 @@ body, .sup-card, .ticket, .app-header, .tabs, .um-add-card,
   justify-content: flex-end;
   margin-top: 18px;
 }
+
+/* ============================================================
+   🎥📝 تسجيل المحاضرة + الاختبار — تصميم أحدث (إضافة 15 سبتمبر 2026)
+   ============================================================ */
+.qm-section { margin-bottom: 6px; }
+.qm-section-title { margin: 0 0 10px; font-size: 14.5px; }
+.qm-hint { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+.qm-divider { margin: 18px 0; border: none; border-top: 1px solid var(--paper-line); }
+.qm-btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.qm-file-info { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.qm-review-summary {
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--paper-line);
+  color: var(--ink);
+  margin: 0 0 10px;
+  display: inline-block;
+}
+
+.qm-progress-wrap { margin: 8px 0 4px; }
+.qm-progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--paper-line);
+  overflow: hidden;
+}
+.qm-progress-fill {
+  height: 100%;
+  background: var(--primary);
+  transition: width 0.2s ease;
+}
+.qm-progress-text {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  text-align: center;
+}
+
+.qm-q-card {
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: var(--paper);
+}
+.qm-q-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.qm-q-badge {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.qm-q-text {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--paper-line);
+  font-size: 13.5px;
+  font-weight: 700;
+  background: var(--paper);
+  color: var(--ink);
+}
+.qm-q-del {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.qm-q-del:hover { background: var(--paper-line); }
+.qm-q-options { display: grid; gap: 6px; }
+.qm-q-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--paper-line);
+  cursor: pointer;
+}
+.qm-q-option.is-correct { border-color: var(--success); background: rgba(22, 163, 74, 0.08); }
+.qm-q-option input[type="text"] {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 13px;
+  color: var(--ink);
+}
+.qm-q-option input[type="text"]:focus { border-color: var(--paper-line); background: var(--paper); }
+
+/* واجهة العامل — أخذ الاختبار */
+.wq-meta-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.wq-meta-chip {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--paper-line);
+  color: var(--ink);
+}
+.wq-q-card {
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.wq-q-title { font-weight: 700; font-size: 14px; margin-bottom: 10px; display: flex; gap: 8px; align-items: flex-start; }
+.wq-q-badge {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wq-q-options { display: grid; gap: 8px; }
+.wq-q-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1.5px solid var(--paper-line);
+  cursor: pointer;
+  font-size: 13.5px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.wq-q-option:hover { border-color: var(--primary); }
+.wq-q-option.is-selected { border-color: var(--primary); background: rgba(226, 0, 26, 0.06); font-weight: 700; }
+.wq-progress-note { font-size: 12px; color: var(--muted); text-align: center; margin: 4px 0 12px; }
+.wq-expired-note { font-size: 13.5px; font-weight: 700; color: var(--warning); }
+.wq-hint { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+
+.wq-result-hero { text-align: center; padding: 12px 4px 4px; }
+.wq-result-hero h3 { margin: 6px 0; }
+.wq-result-icon { font-size: 40px; line-height: 1; }
+.wq-result-score { font-size: 26px; font-weight: 800; margin: 4px 0; }
+.wq-result-required { font-size: 14px; font-weight: 500; color: var(--muted); }
+.wq-result-pass .wq-result-score { color: var(--success); }
+.wq-result-fail .wq-result-score { color: var(--danger); }
+
+.wq-video-player {
+  width: 100%;
+  max-height: 60vh;
+  border-radius: 10px;
+  background: #000;
+  display: block;
+}
+
+.wl-dash { color: var(--muted); font-size: 11px; }
+.wl-expired-tag {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--warning);
+  white-space: nowrap;
+}
+
+/* ============================================================
+   🎤 بلاغ/طلب صوتي (إضافة 15 سبتمبر 2026)
+   ============================================================ */
+.voice-report-btn {
+  background: var(--primary);
+  border: none;
+  color: #fff;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-size: 1.15rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+}
+.voice-report-btn:hover { transform: scale(1.06); }
+
+.voice-hint { font-size: 12.5px; color: var(--muted); margin: 0 0 14px; }
+.voice-record-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.voice-record-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  background: var(--primary);
+  color: #fff;
+}
+.voice-record-btn.is-recording {
+  background: var(--danger);
+  animation: voicePulse 1.2s infinite;
+}
+@keyframes voicePulse {
+  0%   { box-shadow: 0 0 0 0 rgba(200, 30, 58, 0.5); }
+  70%  { box-shadow: 0 0 0 10px rgba(200, 30, 58, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(200, 30, 58, 0); }
+}
+.voice-record-status { font-size: 12.5px; color: var(--muted); }
+.voice-unsupported-note {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--warning);
+  background: rgba(217, 119, 6, 0.08);
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.voice-suggest-box {
+  font-size: 15px;
+  font-weight: 800;
+  text-align: center;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--paper-line);
+  color: var(--ink);
+}
+.voice-swap-row { text-align: center; }
+.voice-choice-row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }
+.voice-choice-row .submit-btn { flex: 1; min-width: 140px; }
 
 /* ============================================================
    🛡️ AUDIT LOG — عرض بشكل خط زمني (Timeline)

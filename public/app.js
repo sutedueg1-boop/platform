@@ -71,6 +71,18 @@ function T(s) {
     const hit2 = I18N_STRINGS[trimmed];
     if (hit2 !== undefined) return s.replace(trimmed, hit2);
   }
+  // نص فيه رقم متغيّر (زي نسبة نجاح اختبار أو عدّاد) — جرّب المطابقة بعد
+  // استبدال كل رقم بعلامة ثابتة "§"، وبعد الترجمة رجّع الأرقام الأصلية
+  // في أماكنها (إضافة 15 سبتمبر 2026 — لحالات زي "رسب في الاختبار (40%)").
+  const genericKey = s.replace(/\d+(\.\d+)?/g, '§');
+  if (genericKey !== s) {
+    const hit3 = I18N_STRINGS[genericKey];
+    if (hit3 !== undefined) {
+      const nums = s.match(/\d+(\.\d+)?/g) || [];
+      let i = 0;
+      return hit3.replace(/§/g, () => (i < nums.length ? nums[i++] : '§'));
+    }
+  }
   return s;
 }
 window.T = T;
@@ -157,6 +169,170 @@ Object.assign(I18N_STRINGS, {
   'اكتب سؤالك هنا...': 'Type your question...',
   'محادثة جديدة': 'New chat',
   'إغلاق': 'Close',
+});
+
+// ترجمات إضافات 15 سبتمبر 2026 (استهداف المحاضرات، تسجيل واختبار
+// المحاضرة، طلب محاضرة من العامل) — لإصلاح شكوى إن الإضافات الجديدة
+// إنجليزيها مش متظبط.
+Object.assign(I18N_STRINGS, {
+  "الاختبار": "Quiz",
+  "🔁 إعادة": "🔁 Retake",
+  "📝 خذ الاختبار": "📝 Take quiz",
+  "🎥 تسجيل واختبار": "🎥 Recording & quiz",
+  "تعذر إيجاد المحاضرة": "Could not find the session",
+  "رابط تسجيل المحاضرة (يوتيوب غير مُدرج / درايف / أي رابط https)": "Recording link (unlisted YouTube / Drive / any https link)",
+  "أو ارفع ملف فيديو صغير مباشرة (أقل من 30 ميجا — لتسجيلات أطول استخدم رابط)": "Or upload a small video file directly (under 30MB — for longer recordings use a link)",
+  "💾 حفظ التسجيل": "💾 Save recording",
+  "📝 اختبار المحاضرة": "📝 Session quiz",
+  "نسبة النجاح المطلوبة % (العامل اللي ماياخدهاش يتلغي تأكيد حضوره)": "Required pass percentage % (a worker who misses it has their attendance cancelled)",
+  "➕ إضافة سؤال": "➕ Add question",
+  "💾 حفظ الاختبار": "💾 Save quiz",
+  "🔓 إعادة فتح الاختبار": "🔓 Reopen quiz",
+  "الاختبار مرة واحدة بس افتراضيًا لكل عامل. هنا تقدر تفتحه تاني للكل، أو لعامل واحد بالتحديد.": "By default the quiz is one attempt per worker. Here you can reopen it for everyone, or for one specific worker.",
+  "🔓 فتح للكل": "🔓 Reopen for everyone",
+  "🔓 فتح لعامل معيّن": "🔓 Reopen for one worker",
+  "السؤال": "Question",
+  "نص السؤال": "Question text",
+  "الإجابة الصحيحة": "Correct answer",
+  "خيار": "Option",
+  "مفيش أسئلة لسه — دوس \"إضافة سؤال\"": "No questions yet — click \"Add question\"",
+  "✅ تم حفظ التسجيل": "✅ Recording saved",
+  "حصل خطأ": "Something went wrong",
+  "حجم الملف أكبر من 30 ميجا — استخدم رابط فيديو خارجي بدل كده": "File is larger than 30MB — use an external video link instead",
+  "حط رابط فيديو أو ارفع ملف": "Enter a video link or upload a file",
+  "ضيف سؤال واحد على الأقل": "Add at least one question",
+  "✅ تم حفظ الاختبار": "✅ Quiz saved",
+  "كود العامل:": "Worker's code:",
+  "كام محاولة إضافية؟ (سيب فاضي = 1)": "How many extra attempts? (leave blank = 1)",
+  "✅ تم فتح الاختبار": "✅ Quiz reopened",
+  "تعذر تحميل الاختبار": "Could not load the quiz",
+  "اختبار المحاضرة": "Session quiz",
+  "استنفدت عدد محاولات الاختبار المسموح بها.": "You've used all your allowed quiz attempts.",
+  "آخر نتيجة: ": "Last score: ",
+  "اطلب من مسؤول السلامة يفتحلك محاولة إضافية.": "Ask the HSE supervisor to give you an extra attempt.",
+  "نسبة النجاح المطلوبة": "Required pass percentage",
+  "المحاولات المتبقية": "Attempts remaining",
+  "✅ تسليم الإجابات": "✅ Submit answers",
+  "جاوب على كل الأسئلة الأول": "Answer all questions first",
+  "مبروك، نجحت!": "Congratulations, you passed!",
+  "نتيجتك": "Your score",
+  "للأسف رسبت": "Unfortunately, you didn't pass",
+  "المطلوب": "Required",
+  "تم إلغاء تأكيد حضورك. اطلب من مسؤول السلامة يفتحلك الاختبار تاني لو محتاج تعيد.": "Your attendance confirmation has been cancelled. Ask the HSE supervisor to reopen the quiz if you need to retake it.",
+  "من فضلك اكتب موضوع المحاضرة": "Please enter the training topic",
+  "✅ تم إرسال طلبك للسيفتي بنجاح": "✅ Your request has been sent to Safety",
+  "حصل خطأ أثناء إرسال الطلب": "An error occurred while sending the request",
+  "لسه معملتش أي طلب محاضرة.": "You haven't made any training requests yet.",
+  "لا توجد طلبات محاضرات حاليًا.": "There are no training requests currently.",
+  "العامل": "Worker",
+  "ملاحظة": "Note",
+  "إجراء": "Action",
+  "✅ قبول": "✅ Accept",
+  "❌ رفض": "❌ Decline",
+  "↩️ رجوع لقيد المراجعة": "↩️ Back to pending",
+  "سبب الرفض (اختياري):": "Reason for decline (optional):",
+  "حصل خطأ أثناء تحديث الطلب": "An error occurred while updating the request",
+  "اختر القسم المستهدف": "Choose the target department",
+  "اكتب كود أو أكواد العمال المستهدفين": "Enter the target worker code(s)",
+  "⚠️ حضرت محاضرة بنفس الموضوع دي قبل كده": "⚠️ You already attended a session on this same topic before",
+  "✅ هيتم جدولتها": "✅ Will be scheduled",
+  "🎉 تمت": "🎉 Done",
+  "❌ مرفوض": "❌ Declined",
+  "اكتب اسم موضوع المحاضرة": "Enter the training topic name",
+  "ملاحظة (اختياري)": "Note (optional)",
+  "أي تفاصيل إضافية عن سبب الطلب...": "Any extra details about the request...",
+  "📩 إرسال الطلب": "📩 Send request",
+  "📋 طلبات المحاضرات اللي بعتها": "📋 Training requests you sent",
+  "🎓 عايز محاضرة معينة؟": "🎓 Want a specific training?",
+  "اطلب موضوع المحاضرة اللي محتاجها من السيفتي وهيتم مراجعة طلبك.": "Request the training topic you need from Safety and your request will be reviewed.",
+  "الجميع": "Everyone",
+  "قسم معين": "A specific department",
+  "عمال محددين (بالكود)": "Specific workers (by code)",
+  "اختر القسم": "Choose department",
+  "أكواد العمال (افصل بينهم بفاصلة)": "Worker codes (comma-separated)",
+  "مثال: 123, 456 — أو كود واحد بس": "e.g. 123, 456 — or just one code",
+  "🎓 طلبات محاضرات من العمال": "🎓 Training requests from workers",
+  "<div class=\"empty\">لسه معملتش أي طلب محاضرة.</div>": "<div class=\"empty\">You haven't made any training requests yet.</div>",
+  "<div class=\"empty\">لا توجد طلبات محاضرات حاليًا.</div>": "<div class=\"empty\">There are no training requests currently.</div>",
+  "❌ رسب في اختبار المحاضرة (§%)": "❌ Failed the session quiz (§%)",
+});
+
+// ترجمات نظام كلمة السر الشخصية للحسابات المشتركة (إضافة 15 سبتمبر 2026)
+Object.assign(I18N_STRINGS, {
+  "🔑 اعمل كلمة سر شخصية لنفسك": "🔑 Create your personal password",
+  "الحساب ده بيستخدمه أكتر من شخص. عشان محدش يحتاج يسأل التاني على كلمة السر، اعمل كلمة سر خاصة بيك انت بس — من دلوقتي هتدخل بيها انت، وأي زميل تاني ليه كلمة سره الخاصة.": "This account is shared by more than one person. So nobody has to ask a colleague for the password, create one just for yourself — from now on you'll log in with it, and every other colleague has their own.",
+  "كلمة السر الشخصية (6 أحرف على الأقل)": "Your personal password (6 characters minimum)",
+  "تأكيد كلمة السر": "Confirm password",
+  "حفظ كلمة السر والمتابعة": "Save password and continue",
+  "كلمة السر يجب ألا تقل عن 6 أحرف": "Password must be at least 6 characters",
+  "كلمة السر وتأكيدها غير متطابقين": "Password and confirmation don't match",
+  "تم إنشاء كلمة السر الشخصية بنجاح ✓": "Personal password created successfully ✓",
+  "فشل حفظ كلمة السر": "Failed to save the password",
+  "عمل كلمة سر شخصية:": "Have set a personal password:",
+  "محدش عمل كلمة سر شخصية لسه": "Nobody has set a personal password yet",
+  "الأعضاء": "Members",
+  "أعضاء حساب": "Members of account",
+  "كل واحد من دول عمل كلمة سر شخصية لنفسه بكوده الوظيفي، ومحدش غيره يعرفها. لو حد نسي كلمة سره، اضغط \"إعادة تعيين\" عشان يتطلب منه يعمل واحدة جديدة أول ما يدخل تاني.": "Each of these has set their own personal password with their employee code, known to nobody else. If someone forgets theirs, click \"Reset\" so they're asked to create a new one next time they log in.",
+  "🔄 إعادة تعيين": "🔄 Reset",
+  "محدش عمل كلمة سر شخصية على الحساب ده لسه — أول واحد يدخل بكلمة سر الحساب الحالية هيتطلب منه يعمل واحدة.": "Nobody has set a personal password on this account yet — the first person to log in with the account's current password will be asked to create one.",
+  "هيتمسح كلمة السر الشخصية بتاعة": "This will delete the personal password of",
+  "وهيتطلب منه يعمل واحدة جديدة أول ما يدخل تاني (بكلمة سر الحساب الحالية أو المؤقتة). متأكد؟": "and they'll be asked to create a new one next time they log in (using the account's current or temporary password). Are you sure?",
+  "✅ تم مسح كلمة السر الشخصية": "✅ Personal password deleted",
+  "فشل مسح كلمة السر": "Failed to delete the password",
+});
+
+// ترجمات إعادة تصميم التسجيل/الاختبار + مدة إتاحة المراجعة (إضافة 15 سبتمبر 2026، دفعة تانية)
+Object.assign(I18N_STRINGS, {
+  "تسجيل ومسابقة": "Recording & quiz",
+  "أو ارفع ملف فيديو مباشرة (حتى ~1.5 جيجا — لتسجيلات أكبر استخدم رابط)": "Or upload a video file directly (up to ~1.5GB — for longer recordings use a link)",
+  "ميجا": "MB",
+  "حجم الملف أكبر من 1.5 جيجا — استخدم رابط فيديو خارجي بدل كده": "File is larger than 1.5GB — use an external video link instead",
+  "حذف السؤال": "Delete question",
+  "مدة إتاحة المراجعة للعامل": "Worker review-access period",
+  "بعد قفل المحاضرة، لحد كام يوم العامل يقدر يشوف التسجيل ويعمل/يعيد الاختبار؟ (0 = بدون حد)": "After closing the session, for how many days can the worker watch the recording and take/retake the quiz? (0 = no limit)",
+  "المحاضرة لسه مش مقفولة — المهلة بتبدأ تتحسب من لحظة القفل.": "The session isn't closed yet — the countdown starts once it's closed.",
+  "بدون حد — التسجيل والاختبار متاحين للعامل للأبد.": "No limit — the recording and quiz stay available to the worker forever.",
+  "باقي": "Remaining:",
+  "يوم على انتهاء المراجعة": "day(s) until review access ends",
+  "⚠️ انتهت مدة المراجعة — العامل مايقدرش يشوف التسجيل ولا ياخد الاختبار دلوقتي.": "⚠️ The review period has ended — the worker can no longer watch the recording or take the quiz.",
+  "💾 حفظ المهلة": "💾 Save period",
+  "✅ تم حفظ المهلة": "✅ Period saved",
+  "انتهت مدة إتاحة هذا الاختبار للمراجعة.": "The review period for this quiz has ended.",
+  "نسبة النجاح": "Pass rate",
+  "جاوبت على": "Answered",
+  "تسجيل المحاضرة": "Session recording",
+  "التسجيل ده رابط خارجي — هيتفتح في تاب جديد.": "This recording is an external link — it will open in a new tab.",
+  "🔗 فتح التسجيل": "🔗 Open recording",
+  "التسجيل": "Recording",
+  "انتهت المدة": "Period ended",
+  "انتهت مدة المراجعة": "Review period has ended",
+  "🎥 مشاهدة": "🎥 Watch",
+});
+
+// ترجمات البلاغ/الطلب الصوتي (إضافة 15 سبتمبر 2026، دفعة تالتة)
+Object.assign(I18N_STRINGS, {
+  "بلاغ أو طلب بالصوت": "Voice report or request",
+  "احكي هتعمل إيه — تصريح شغل ولا بلاغ خطورة — وهوديك للمكان الصح. ده تصنيف تلقائي بسيط، لسه لازم تراجع وتكمل وتبعت بنفسك.": "Say what you want to do — a work permit or a hazard report — and you'll be taken to the right place. This is a simple automatic classification, you still need to review, complete, and submit it yourself.",
+  "ابدأ التسجيل": "Start recording",
+  "التسجيل الصوتي مش مدعوم على المتصفح ده — اكتب طلبك بدل كده وهيتعامل معاه بنفس الطريقة.": "Voice recording isn't supported on this browser — type your request instead and it'll be handled the same way.",
+  "النص (اتسجل أو اكتبه بنفسك)": "Text (recorded, or type it yourself)",
+  "مثال: عايز اطلع تصريح شغل ساخن في الصيانة، أو: في تسريب زيت جنب المكينة التالتة": "Example: I want a hot work permit in Maintenance, or: there's an oil leak next to the third machine",
+  "✅ كمل": "✅ Continue",
+  "⏹️ إيقاف التسجيل": "⏹️ Stop recording",
+  "🔴 بيسمع دلوقتي...": "🔴 Listening...",
+  "حصل خطأ في التسجيل، جرب تاني أو اكتب بنفسك": "A recording error occurred — try again or type it yourself",
+  "اتكلم أو اكتب حاجة الأول": "Say or type something first",
+  "طيب، ده اللي فهمته": "Okay, here's what I understood",
+  "طلب تصريح عمل": "Work permit request",
+  "لو صح، دوس \"كمل\" وهيتفتحلك المكان الصح جاهز بالوصف. لو غلط، اختر النوع الصح بنفسك.": "If that's right, press \"Continue\" and the right screen opens pre-filled with your description. If not, pick the correct type yourself.",
+  "لأ، ده": "No, this is",
+  "طلب تصريح": "A permit request",
+  "مش متأكد ده إيه بالظبط": "Not sure exactly what this is",
+  "اختر بنفسك عشان محدش يتلخبط:": "Pick it yourself so nothing gets mixed up:",
+  "ده طلب تصريح": "This is a permit request",
+  "ده بلاغ خطورة": "This is a hazard report",
+  "✅ اتملت البيانات المتاحة من كلامك — كمّل الباقي وابعت الطلب": "✅ The available details from what you said were filled in — complete the rest and submit the request",
+  "✅ اتملت البيانات المتاحة من كلامك — كمّل الباقي وابعت البلاغ": "✅ The available details from what you said were filled in — complete the rest and submit the report",
 });
 
 /** لغة تنسيق التواريخ والأرقام: عربية بأرقام عربية، إنجليزية بأرقام لاتينية. */
@@ -742,6 +918,239 @@ const HSE_CHECKLIST = {
   }
 };
 
+// ============================================================
+// 🎤 بلاغ/طلب صوتي — إضافة 15 سبتمبر 2026 (بطلب بشمهندس أحمد)
+// ============================================================
+// الفكرة: العامل بيحكي هيعمل إيه (تصريح شغل ولا بلاغ خطورة) بصوته،
+// والنظام يحدد النوع المناسب ويوديه للتبويب الصح مع تعبئة اللي يقدر
+// يستنتجه (الوصف، نوع التصريح، مكان العمل لو اتقال). ده تصنيف محلي
+// بكلمات مفتاحية — مش ذكاء اصطناعي حقيقي (بطلب بشمهندس أحمد: من غير
+// أي مفتاح API خارجي أو تكلفة) — فمش هيفهم كل صياغة ممكنة، وده ليه حد:
+// لو مش متأكد، بيسأل العامل يختار بنفسه بدل ما يخمّن غلط في حاجة
+// حساسة زي بلاغ خطورة. الوصف اللي بيتقال بيتحط كنص في خانة الوصف،
+// والعامل لازم يراجعه ويكمل باقي الحقول (قائمة التحقق، تقييم المخاطر
+// للتصاريح) ويبعت بنفسه — مفيش إرسال تلقائي خالص.
+//
+// دعم التسجيل الصوتي نفسه معتمد على Web Speech API المدمجة في المتصفح
+// (مجانية، بدون مفتاح API) — بتشتغل كويس على Chrome/Edge وأندرويد، لكن
+// مش مدعومة على Safari/آيفون. لو مش مدعومة، النافذة بترجع تلقائيًا
+// لخانة كتابة عادية تستخدم نفس منطق التصنيف والتوجيه.
+
+const VOICE_PERMIT_TYPE_HINTS = {
+  hot: ['شغل ساخن', 'لحام', 'لحيم', 'صاروخ قطع', 'قطع بالصاروخ', 'شغل بالنار', 'هلحم'],
+  height: ['ارتفاع', 'سقالة', 'طلوع فوق', 'شغل فوق', 'سلم طويل', 'اشتغل فوق'],
+  confined: ['مكان مغلق', 'اماكن مغلقة', 'خزان', 'تنك', 'غرفة مغلقة', 'مساحة ضيقة', 'دخول خزان'],
+  excavation: ['حفر', 'حفرة', 'خندق', 'هحفر'],
+  lifting: ['رفع حمل', 'ونش', 'رافعة', 'كرين', 'هرفع', 'رفع احمال'],
+  loto: ['عزل كهربا', 'فصل التيار', 'قفل الطاقة', 'عزل الطاقة', 'فصل وعزل', 'لوتو'],
+};
+const VOICE_PERMIT_INTENT_WORDS = ['تصريح', 'طلب عمل', 'عايز اشتغل', 'هدخل اشتغل', 'محتاج تصريح', 'اطلع تصريح', 'اعمل تصريح'];
+const VOICE_HAZARD_INTENT_WORDS = [
+  'بلاغ', 'فيه خطر', 'لاحظت خطر', 'تسريب', 'تسرب', 'حريق', 'اصابة', 'عطل خطير',
+  'خطوره', 'خطورة', 'مشكلة سلامة', 'زيت سايح', 'كهرباء مكشوفة', 'سلك عاري',
+  'دخان', 'ريحة غاز', 'شرخ', 'وقعت حاجة', 'بلغ عن', 'ابلغ عن'
+];
+// المفاتيح لازم تتطابق مع WORK_LOCATIONS فوق بالظبط.
+const VOICE_LOCATION_HINTS = {
+  'Administration': ['الإدارة', 'الادارة'],
+  'all factory': ['كل المصنع', 'المصنع كله', 'كل الأماكن'],
+  'Maintenance': ['الصيانة', 'صيانة'],
+  'outside': ['برة المصنع', 'خارج المصنع', 'برة'],
+  'Production - Master Batch': ['ماستر باتش', 'الماستر باتش'],
+  'Production - Special Compounds': ['كومباوند', 'الكومباوند', 'خامات خاصة'],
+  'Quality Control': ['الجودة', 'مراقبة الجودة', 'كواليتي', 'كونترول الجودة'],
+  'R&D': ['البحث والتطوير', 'ار اند دي'],
+  'Warehouse': ['المخزن', 'المخازن', 'المستودع'],
+};
+
+function _voiceCountMatches(text, words) {
+  let n = 0;
+  for (const w of words) if (text.includes(w)) n++;
+  return n;
+}
+
+/** يحلل نص (من الصوت أو مكتوب) ويحدد: بلاغ / تصريح / مش واضح — محليًا بالكامل. */
+function classifyVoiceReportText(rawText) {
+  const text = (rawText || '').trim();
+  const hazardScore = _voiceCountMatches(text, VOICE_HAZARD_INTENT_WORDS);
+  const permitScore = _voiceCountMatches(text, VOICE_PERMIT_INTENT_WORDS);
+
+  let permitTypeKey = null;
+  let bestTypeScore = 0;
+  for (const [key, words] of Object.entries(VOICE_PERMIT_TYPE_HINTS)) {
+    const score = _voiceCountMatches(text, words);
+    if (score > bestTypeScore) { bestTypeScore = score; permitTypeKey = key; }
+  }
+  // ذكر نوع تصريح محدد (زي "لحام") بيعتبر دليل إضافي على نية "تصريح".
+  const adjustedPermitScore = permitScore + (permitTypeKey ? bestTypeScore : 0);
+
+  let locationMatch = null;
+  for (const [loc, words] of Object.entries(VOICE_LOCATION_HINTS)) {
+    if (_voiceCountMatches(text, words) > 0) { locationMatch = loc; break; }
+  }
+
+  let kind = 'ambiguous';
+  if (adjustedPermitScore > hazardScore) kind = 'permit';
+  else if (hazardScore > adjustedPermitScore) kind = 'hazard';
+
+  return {
+    kind,
+    permitTypeKey: permitTypeKey || 'general',
+    locationMatch,
+    text
+  };
+}
+
+let _voiceReportState = { recognition: null, recording: false };
+
+function openVoiceReportModal() {
+  const supported = ('webkitSpeechRecognition' in window) || ('SpeechRecognition' in window);
+  const html = `
+    <h3 style="margin-top:0;">🎤 ${T("بلاغ أو طلب بالصوت")}</h3>
+    <p class="voice-hint">${T("احكي هتعمل إيه — تصريح شغل ولا بلاغ خطورة — وهوديك للمكان الصح. ده تصنيف تلقائي بسيط، لسه لازم تراجع وتكمل وتبعت بنفسك.")}</p>
+    ${supported ? `
+      <div class="voice-record-row">
+        <button type="button" id="voiceRecordBtn" class="voice-record-btn" onclick="toggleVoiceRecording()">🎙️ ${T("ابدأ التسجيل")}</button>
+        <span id="voiceRecordStatus" class="voice-record-status"></span>
+      </div>
+    ` : `
+      <p class="voice-unsupported-note">⚠️ ${T("التسجيل الصوتي مش مدعوم على المتصفح ده — اكتب طلبك بدل كده وهيتعامل معاه بنفس الطريقة.")}</p>
+    `}
+    <div class="app-modal-field">
+      <label>${T("النص (اتسجل أو اكتبه بنفسك)")}</label>
+      <textarea id="voiceReportText" rows="4" placeholder="${T("مثال: عايز اطلع تصريح شغل ساخن في الصيانة، أو: في تسريب زيت جنب المكينة التالتة")}"></textarea>
+    </div>
+    <div class="app-modal-error" id="voiceReportMsg"></div>
+    <div class="app-modal-actions">
+      <button class="submit-btn" type="button" onclick="processVoiceReportText()">${T("✅ كمل")}</button>
+    </div>
+  `;
+  openAppModal(html);
+}
+
+function toggleVoiceRecording() {
+  const btn = document.getElementById('voiceRecordBtn');
+  const status = document.getElementById('voiceRecordStatus');
+  if (_voiceReportState.recording) {
+    if (_voiceReportState.recognition) _voiceReportState.recognition.stop();
+    return;
+  }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new SR();
+  rec.lang = 'ar-EG';
+  rec.interimResults = true;
+  rec.continuous = true;
+  const textEl = document.getElementById('voiceReportText');
+  let finalText = textEl.value ? textEl.value + ' ' : '';
+
+  rec.onstart = () => {
+    _voiceReportState.recording = true;
+    if (btn) { btn.textContent = T('⏹️ إيقاف التسجيل'); btn.classList.add('is-recording'); }
+    if (status) status.textContent = T('🔴 بيسمع دلوقتي...');
+  };
+  rec.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const chunk = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalText += chunk + ' ';
+      else interim += chunk;
+    }
+    textEl.value = (finalText + interim).trim();
+  };
+  rec.onerror = () => {
+    if (status) status.textContent = T('حصل خطأ في التسجيل، جرب تاني أو اكتب بنفسك');
+  };
+  rec.onend = () => {
+    _voiceReportState.recording = false;
+    if (btn) { btn.textContent = T('🎙️ ابدأ التسجيل'); btn.classList.remove('is-recording'); }
+    if (status) status.textContent = '';
+  };
+  _voiceReportState.recognition = rec;
+  rec.start();
+}
+
+function processVoiceReportText() {
+  const textEl = document.getElementById('voiceReportText');
+  const text = textEl ? textEl.value.trim() : '';
+  if (!text) {
+    qmShowMsg('voiceReportMsg', T('اتكلم أو اكتب حاجة الأول'), true);
+    return;
+  }
+  const result = classifyVoiceReportText(text);
+  if (result.kind === 'ambiguous') {
+    renderVoiceAmbiguousChoice(result);
+  } else {
+    renderVoiceConfirmChoice(result);
+  }
+}
+
+// بنخزّن النتيجة في متغيّر بدل ما نمررها كنص جوه onclick (لو النص المنطوق
+// فيه علامة اقتباس، ده كان بيكسر الـ HTML) — الأزرار بس بتبعت "إيه
+// الاختيار" وتقرأ الباقي من هنا.
+let _pendingVoiceResult = null;
+
+function renderVoiceConfirmChoice(result) {
+  _pendingVoiceResult = result;
+  const kindLabel = result.kind === 'permit'
+    ? `📋 ${T('طلب تصريح عمل')} (${T(PERMIT_TYPES[result.permitTypeKey].label)})`
+    : `⚠️ ${T('بلاغ خطورة')}`;
+  const otherKindLabel = result.kind === 'permit' ? T('بلاغ خطورة') : T('طلب تصريح');
+  const html = `
+    <h3 style="margin-top:0;">${T("طيب، ده اللي فهمته")}</h3>
+    <p class="voice-suggest-box">${kindLabel}</p>
+    <p class="voice-hint">${T('لو صح، دوس "كمل" وهيتفتحلك المكان الصح جاهز بالوصف. لو غلط، اختر النوع الصح بنفسك.')}</p>
+    <div class="app-modal-actions" style="justify-content:center; margin-bottom:10px;">
+      <button class="submit-btn" type="button" onclick="applyVoiceRouting('${result.kind}')">${T('✅ كمل')}</button>
+    </div>
+    <div class="voice-swap-row">
+      <button class="um-btn" type="button" onclick="applyVoiceRouting('${result.kind === 'permit' ? 'hazard' : 'permit'}')">${T('لأ، ده')} ${otherKindLabel}</button>
+    </div>
+  `;
+  openAppModal(html);
+}
+
+function renderVoiceAmbiguousChoice(result) {
+  _pendingVoiceResult = result;
+  const html = `
+    <h3 style="margin-top:0;">${T("مش متأكد ده إيه بالظبط")}</h3>
+    <p class="voice-hint">${T("اختر بنفسك عشان محدش يتلخبط:")}</p>
+    <div class="voice-choice-row">
+      <button class="submit-btn" type="button" onclick="applyVoiceRouting('permit')">📋 ${T('ده طلب تصريح')}</button>
+      <button class="submit-btn" type="button" style="background:var(--danger);" onclick="applyVoiceRouting('hazard')">⚠️ ${T('ده بلاغ خطورة')}</button>
+    </div>
+  `;
+  openAppModal(html);
+}
+
+function applyVoiceRouting(kind) {
+  const pending = _pendingVoiceResult || {};
+  const permitTypeKey = pending.permitTypeKey || 'general';
+  const locationMatch = pending.locationMatch || null;
+  const text = pending.text || '';
+  _pendingVoiceResult = null;
+  closeAppModal();
+  if (kind === 'permit') {
+    switchTab('worker');
+    selectType(permitTypeKey || 'general');
+    setTimeout(() => {
+      const descEl = document.getElementById('f_desc');
+      if (descEl) descEl.value = text;
+      if (locationMatch) {
+        const locEl = document.getElementById('workLocationSelect');
+        if (locEl) locEl.value = locationMatch;
+      }
+      showToast(T('✅ اتملت البيانات المتاحة من كلامك — كمّل الباقي وابعت الطلب'), 'success');
+    }, 0);
+  } else {
+    switchTab('hazardWorker');
+    setTimeout(() => {
+      const descEl = document.getElementById('hz_desc');
+      if (descEl) descEl.value = text;
+      showToast(T('✅ اتملت البيانات المتاحة من كلامك — كمّل الباقي وابعت البلاغ'), 'success');
+    }, 0);
+  }
+}
+
 let currentFilter = 'الكل';
 let currentTypeFilter = 'الكل';
 let currentPmDeptFilter = 'الكل';
@@ -937,6 +1346,9 @@ function applyRbacUI() {
   // Notification Bell
   const notifContainer = document.getElementById('notifContainer');
   if (notifContainer) notifContainer.style.display = (isWorker || isSup) ? 'inline-flex' : 'none';
+
+  // 🎤 زرار البلاغ/الطلب الصوتي — للعامل بس (إضافة 15 سبتمبر 2026)
+  setDisplay('voiceReportBtn', isWorker);
 }
 
 /**
@@ -1380,6 +1792,9 @@ async function attemptLogin(){
 function startAdminSession(data, opts){
   const animate = !opts || opts.animate !== false;
   const mustChangePassword = data.mustChangePassword === true;
+  // دخل بكلمة سر الحساب المشتركة (أو المؤقتة) ولسه معملش كلمة سر شخصية
+  // بكوده — إضافة 15 سبتمبر 2026. ده بيحل محل "لازم تتغير كلمة السر" القديمة.
+  const needsPersonalPassword = data.needsPersonalPassword === true;
   isLoggedIn      = true;
   currentUsername = data.user.username;
   currentUserName = data.user.name || data.user.username;
@@ -1415,16 +1830,21 @@ function startAdminSession(data, opts){
 
     try {
       startNotificationPolling();
+      subscribeUserToPush();
     } catch (err) {
       console.warn('Non-critical notification setup error:', err);
     }
     // المدير التنفيذي بيفتح على المؤشرات التنفيذية، وباقي الأدوار على لوحة التحكم
     switchTab(currentUserRole === 'ceo' ? 'executive' : 'dashboard');
+    applyPendingNotificationNavFromUrl();
 
     // ── إجبار تغيير كلمة المرور الافتراضية قبل السماح بأي استخدام فعلي ──
     // (11 سبتمبر 2026 — يظهر فقط لحسابات ما زالت تستخدم admin123/123456،
     //  أو حساب دخل بكلمة سر مؤقتة من "نسيت كلمة السر")
-    if (mustChangePassword) {
+    if (needsPersonalPassword) {
+      _pendingProfileModal = data.needsProfile ? (data.previousHolder || {}) : null;
+      showSetPersonalPasswordModal();
+    } else if (mustChangePassword) {
       _pendingProfileModal = data.needsProfile ? (data.previousHolder || {}) : null;
       showForcePasswordChangeModal();
     } else if (data.needsProfile) {
@@ -1523,6 +1943,74 @@ function showForcePasswordChangeModal() {
         if (_pendingProfileModal) { const p = _pendingProfileModal; _pendingProfileModal = null; showAdminProfileModal(p); }
       } else {
         errEl.textContent = data.error || T('فشل تغيير كلمة المرور'); errEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = originalText;
+      }
+    } catch (e) {
+      errEl.textContent = T('خطأ في الاتصال بالسيرفر'); errEl.style.display = 'block';
+      btn.disabled = false; btn.textContent = originalText;
+    }
+  });
+}
+
+/**
+ * showSetPersonalPasswordModal — نافذة إجبارية تظهر بعد دخول أي حساب مشترك
+ * (رئيس قسم/صيانة/سلامة...) بكلمة سر الحساب المشتركة أو المؤقتة، لأول مرة
+ * لهذا الكود الوظيفي تحديدًا. مفيش خانة "كلمة السر الحالية" هنا (الدخول
+ * نفسه كان إثبات كافي) — بس كلمة سر شخصية جديدة، مش هيعرفها حد غيره، ومن
+ * وقتها كلمة سر الحساب المشتركة ما بتشتغلش لكوده هو تاني. إضافة 15 سبتمبر
+ * 2026 بطلب بشمهندس أحمد (كل واحد إداري يعمل كلمة سره بنفسه، محدش يسأل
+ * زميله عليها).
+ */
+function showSetPersonalPasswordModal() {
+  if (document.getElementById('setPersonalPwOverlay')) return; // already shown
+  const overlay = document.createElement('div');
+  overlay.id = 'setPersonalPwOverlay';
+  overlay.className = 'force-pw-overlay';
+  overlay.innerHTML = `
+    <div class="force-pw-card">
+      <h3>${T("🔑 اعمل كلمة سر شخصية لنفسك")}</h3>
+      <p>${T("الحساب ده بيستخدمه أكتر من شخص. عشان محدش يحتاج يسأل التاني على كلمة السر، اعمل كلمة سر خاصة بيك انت بس — من دلوقتي هتدخل بيها انت، وأي زميل تاني ليه كلمة سره الخاصة.")}</p>
+      <input type="password" id="setPersonalPwNew" placeholder="${T("كلمة السر الشخصية (6 أحرف على الأقل)")}" autocomplete="new-password" />
+      <input type="password" id="setPersonalPwConfirm" placeholder="${T("تأكيد كلمة السر")}" autocomplete="new-password" />
+      <div class="force-pw-error" id="setPersonalPwError"></div>
+      <button class="btn btn-primary btn-block" id="setPersonalPwSubmit" type="button">${T("حفظ كلمة السر والمتابعة")}</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  document.getElementById('setPersonalPwSubmit').addEventListener('click', async () => {
+    const btn = document.getElementById('setPersonalPwSubmit');
+    const errEl = document.getElementById('setPersonalPwError');
+    errEl.style.display = 'none';
+    const newPassword     = document.getElementById('setPersonalPwNew').value;
+    const confirmPassword = document.getElementById('setPersonalPwConfirm').value;
+
+    if (!newPassword || !confirmPassword) {
+      errEl.textContent = T('جميع الحقول مطلوبة'); errEl.style.display = 'block'; return;
+    }
+    if (newPassword.length < 6) {
+      errEl.textContent = T('كلمة السر يجب ألا تقل عن 6 أحرف'); errEl.style.display = 'block'; return;
+    }
+    if (newPassword !== confirmPassword) {
+      errEl.textContent = T('كلمة السر وتأكيدها غير متطابقين'); errEl.style.display = 'block'; return;
+    }
+
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="btn-spinner"></span>';
+    try {
+      const res = await authFetch('/api/auth/set-personal-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPassword })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showToast(T('تم إنشاء كلمة السر الشخصية بنجاح ✓'), 'success');
+        overlay.remove();
+        if (_pendingProfileModal) { const p = _pendingProfileModal; _pendingProfileModal = null; showAdminProfileModal(p); }
+      } else {
+        errEl.textContent = data.error || T('فشل حفظ كلمة السر'); errEl.style.display = 'block';
         btn.disabled = false; btn.textContent = originalText;
       }
     } catch (e) {
@@ -1853,6 +2341,7 @@ function _initWorkerOrLoginGate(){
       startNotificationPolling();
       subscribeUserToPush();
       switchTab('dashboard'); // 📊 Default landing: Dashboard
+      applyPendingNotificationNavFromUrl();
       return;
     }
   } catch(e){ /* ignore */ }
@@ -2331,6 +2820,7 @@ function finishEmployeeLogin(emp){
       startNotificationPolling();
       subscribeUserToPush();
       switchTab('dashboard'); // 📊 Default landing: Dashboard
+      applyPendingNotificationNavFromUrl();
       if (typeof window.populateTrainerInfo === 'function') window.populateTrainerInfo();
     }
   });
@@ -3716,11 +4206,13 @@ async function renderUsersPanel(){
                   <span class="role-badge ${u.role}">${roleLabel(u.role)}</span>
                   ${(u.role === 'dept_admin' || u.role === 'maint_admin') && u.department ? `<div style="font-size:11px;color:var(--muted);margin-top:4px;">${escapeHtml(u.department)}</div>` : ''}
                   ${u.mustChangePassword ? `<div class="um-default-pw">⚠️ ${T("لازم تتغير كلمة السر")}</div>` : ''}
+                  <div style="font-size:11px;color:var(--muted);margin-top:4px;">👥 ${(u.members||[]).length ? `${T("عمل كلمة سر شخصية:")} ${(u.members||[]).length}` : T("محدش عمل كلمة سر شخصية لسه")}</div>
                 </td>
                 <td style="color:var(--muted);font-size:12px;">${u.createdAt ? new Date(u.createdAt).toLocaleDateString(LOC()) : '—'}</td>
                 <td>
                   <div class="um-action-btns">
                     <button class="um-btn pass" onclick="openEditUserModal('${u.id}')">${T("✏️ تعديل")}</button>
+                    <button class="um-btn" onclick="openUserMembersModal('${u.id}')">👥 ${T("الأعضاء")}</button>
                     <button class="um-btn del" onclick="deleteUser('${u.id}','${escapeHtml(u.name)}')"
                       ${u.role==='super_admin' ? T('disabled title="لا يمكن حذف Super Admin"') : ''}>${T("🗑 حذف")}</button>
                   </div>
@@ -3733,6 +4225,59 @@ async function renderUsersPanel(){
     `;
   } catch(e){
     listEl.innerHTML = T('<div class="empty" style="color:var(--danger);">فشل تحميل المستخدمين</div>');
+  }
+}
+
+// ============================================================
+// 👥 أعضاء الحساب المشترك — كل واحد عمل كلمة سر شخصية بكوده — إضافة 15
+// سبتمبر 2026 بطلب بشمهندس أحمد
+// ============================================================
+function openUserMembersModal(userId) {
+  const user = (window.umUsers || []).find(u => u.id === userId);
+  if (!user) return;
+  const members = user.members || [];
+  const html = `
+    <h3 style="margin-top:0;">👥 ${T("أعضاء حساب")} ${escapeHtml(user.username)}</h3>
+    <p style="font-size:12.5px; color:var(--muted); margin-top:0;">${T("كل واحد من دول عمل كلمة سر شخصية لنفسه بكوده الوظيفي، ومحدش غيره يعرفها. لو حد نسي كلمة سره، اضغط \"إعادة تعيين\" عشان يتطلب منه يعمل واحدة جديدة أول ما يدخل تاني.")}</p>
+    ${members.length ? `
+      <div class="um-table-wrap">
+        <table class="um-table">
+          <thead><tr><th>${T("الاسم")}</th><th>${T("الكود الوظيفي")}</th><th>${T("تاريخ الإنشاء")}</th><th>${T("إجراء")}</th></tr></thead>
+          <tbody>
+            ${members.map(m => `
+              <tr>
+                <td style="font-weight:700;">${escapeHtml(m.name || '—')}</td>
+                <td dir="ltr">${escapeHtml(m.empCode)}</td>
+                <td style="color:var(--muted); font-size:12px;">${m.createdAt ? new Date(m.createdAt).toLocaleDateString(LOC()) : '—'}</td>
+                <td><button class="um-btn del" style="padding:4px 10px; font-size:11px;" onclick="resetMemberPassword('${userId}', '${escapeHtml(m.empCode)}', '${escapeHtml(m.name || m.empCode)}')">${T("🔄 إعادة تعيين")}</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    ` : `<div class="empty">${T("محدش عمل كلمة سر شخصية على الحساب ده لسه — أول واحد يدخل بكلمة سر الحساب الحالية هيتطلب منه يعمل واحدة.")}</div>`}
+  `;
+  openAppModal(html);
+}
+
+async function resetMemberPassword(userId, empCode, name) {
+  if (!confirm(`${T("هيتمسح كلمة السر الشخصية بتاعة")} ${name} ${T("وهيتطلب منه يعمل واحدة جديدة أول ما يدخل تاني (بكلمة سر الحساب الحالية أو المؤقتة). متأكد؟")}`)) return;
+  try {
+    const res = await authFetch(`/api/users/${encodeURIComponent(userId)}/reset-member-password`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ empCode })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      showToast(T('✅ تم مسح كلمة السر الشخصية'), 'success');
+      closeAppModal();
+      renderUsersPanel();
+    } else {
+      showToast(data.error || T('فشل مسح كلمة السر'), 'error');
+    }
+  } catch (e) {
+    showToast(T('خطأ في الاتصال'), 'error');
   }
 }
 
@@ -6377,14 +6922,21 @@ async function loadWorkerTraining(isSilent = false) {
             </div>
           </div>`;
       } else {
+        // تنبيه لو العامل حضر نفس موضوع المحاضرة دي قبل كده (مش منع، مجرد
+        // إعلام — إضافة 14 سبتمبر 2026).
+        const attendedBeforeNote = activeSession.attendedBefore ? `
+              <p class="pin-row-note" style="margin:0 0 10px 0; font-size:12.5px; color:var(--amber); background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:6px 10px;">
+                ${T("⚠️ حضرت محاضرة بنفس الموضوع دي قبل كده")}${activeSession.attendedBeforeDate ? (' (' + escapeHtml(new Date(activeSession.attendedBeforeDate).toLocaleDateString('ar-EG')) + ')') : ''}
+              </p>` : '';
         activeArea.innerHTML = `
           <div class="ticket" style="border-left: 5px solid var(--amber);">
             <div class="ticket-body">
               <h3 style="margin:0 0 4px 0; color:var(--amber);">${T("📡 محاضرة جارية الآن")}</h3>
               <p style="margin:0 0 12px 0; font-size:14px; font-weight:700;">${escapeHtml(activeSession.title)} | ${escapeHtml(activeSession.location)}</p>
-              <div style="display:flex; gap:8px;">
-                <input type="text" id="trnWorkerPin" placeholder="${T("أدخل رمز الجلسة (PIN)")}" style="flex:1; text-align:center; font-family:monospace; font-size:18px; font-weight:bold; letter-spacing:4px;" maxlength="4">
-                <button class="submit-btn" style="flex:1;" onclick="submitAttendance('${activeSession.id}')">${T("✅ تسجيل حضوري")}</button>
+              ${attendedBeforeNote}
+              <div class="pin-row">
+                <input type="text" id="trnWorkerPin" class="pin-input" placeholder="${T("أدخل رمز الجلسة (PIN)")}" maxlength="4">
+                <button class="submit-btn pin-row-btn" onclick="submitAttendance('${activeSession.id}')">${T("✅ تسجيل حضوري")}</button>
               </div>
               <div id="trnWorkerMsg" class="wl-msg" style="margin-top:8px;"></div>
             </div>
@@ -6406,29 +6958,147 @@ async function loadWorkerTraining(isSilent = false) {
       historyList.innerHTML = `
         <div class="um-table-wrap">
           <table class="um-table">
-            <thead><tr><th>${T("التاريخ")}</th><th>${T("الموضوع")}</th><th>${T("الحالة")}</th></tr></thead>
+            <thead><tr><th>${T("التاريخ")}</th><th>${T("الموضوع")}</th><th>${T("الحالة")}</th><th>${T("التسجيل")}</th><th>${T("الاختبار")}</th></tr></thead>
             <tbody>
               ${myHistory.map(h => {
                 const stText = h.status || '';
                 let stHtml = escapeHtml(T(stText));
-                if (stText.includes('غائب')) {
+                if (stText.includes('غائب') || h.quizFailed) {
                   stHtml = `<span class="badge badge-danger" style="background:#fee2e2; color:#b91c1c; border:1px solid #f87171; padding:4px 8px; border-radius:6px; font-weight:bold; font-size:11px; white-space:nowrap; display:inline-block;">${T(stText)}</span>`;
                 } else if (stText.includes('مؤكد')) {
                   stHtml = `<span class="badge badge-success" style="background:#dcfce7; color:#15803d; border:1px solid #86efac; padding:4px 8px; border-radius:6px; font-weight:bold; font-size:11px; white-space:nowrap; display:inline-block;">${T(stText)}</span>`;
                 } else {
                   stHtml = `<span class="badge badge-warning" style="background:#fef3c7; color:#b45309; border:1px solid #fde68a; padding:4px 8px; border-radius:6px; font-weight:bold; font-size:11px; white-space:nowrap; display:inline-block;">${T(stText)}</span>`;
                 }
+                // زرار "التسجيل" لو فيه فيديو للمحاضرة دي ومدة المراجعة لسه
+                // متاحة (إضافة 15 سبتمبر 2026 — قبل كده التسجيل مكانش بيوصل
+                // للعامل خالص، حتى لو الأدمن رفعه).
+                let recordingBtn = `<span class="wl-dash">—</span>`;
+                if (h.hasRecording) {
+                  recordingBtn = h.reviewExpired
+                    ? `<span class="wl-expired-tag" title="${T('انتهت مدة المراجعة')}">⏳ ${T('انتهت المدة')}</span>`
+                    : `<button class="um-btn" style="padding:4px 10px; font-size:11px;" onclick="openWorkerRecordingModal('${h.recordingUrl}')">${T('🎥 مشاهدة')}</button>`;
+                }
+                // زرار "الاختبار" لأي محاضرة عليها اختبار (إضافة 15 سبتمبر 2026)
+                let quizBtn = `<span class="wl-dash">—</span>`;
+                if (h.hasQuiz) {
+                  quizBtn = h.reviewExpired
+                    ? `<span class="wl-expired-tag" title="${T('انتهت مدة المراجعة')}">⏳ ${T('انتهت المدة')}</span>`
+                    : `<button class="um-btn" style="padding:4px 10px; font-size:11px;" onclick="openWorkerQuizModal('${h.trainingId}')">${h.quizFailed ? T('🔁 إعادة') : T('📝 خذ الاختبار')}</button>`;
+                }
                 return `
                 <tr>
                   <td style="font-size:12px; color:var(--muted);">${escapeHtml(h.date)}</td>
                   <td style="font-weight:700; font-size:13px;">${escapeHtml(h.title)}</td>
                   <td style="font-size:12px; font-weight:700;">${stHtml}</td>
+                  <td>${recordingBtn}</td>
+                  <td>${quizBtn}</td>
                 </tr>`;
               }).join('')}
             </tbody>
           </table>
         </div>`;
     }
+
+    // طلب محاضرة معينة — تعبئة قائمة المواضيع المقترحة وتحميل طلباتي
+    // (إضافة 14 سبتمبر 2026).
+    populateTrainingRequestTopicsList(myHistory);
+    loadMyTrainingRequests();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+// قائمة مواضيع مقترحة لطلب المحاضرة — نفس قائمة المواضيع الافتراضية
+// المستخدمة في شاشة الأدمن، بالإضافة لمواضيع محاضرات العامل السابقة.
+function populateTrainingRequestTopicsList(myHistory) {
+  const dl = document.getElementById('trnReqTopicsList');
+  if (!dl) return;
+  const defaultTopics = [
+    T("السلامة والصحة المهنية العامة"),
+    T("مكافحة الحرائق والإخلاء"),
+    T("الإسعافات الأولية"),
+    T("مهمات الوقاية الشخصية (PPE)"),
+    T("العمل على ارتفاعات"),
+    T("السلامة الكهربائية"),
+    T("التعامل الآمن مع المواد الكيميائية")
+  ];
+  const historyTopics = (myHistory || []).map(h => h && h.title).filter(Boolean);
+  const allUnique = Array.from(new Set([...defaultTopics, ...historyTopics]));
+  dl.innerHTML = allUnique.map(top => `<option value="${escapeHtml(top)}">`).join('');
+}
+
+async function submitTrainingRequest() {
+  const topicInput = document.getElementById('trnReqTopicInput');
+  const noteInput = document.getElementById('trnReqNoteInput');
+  const msgEl = document.getElementById('trnReqMsg');
+  if (!topicInput || !msgEl) return;
+  const topicTitle = (topicInput.value || '').trim();
+  const note = (noteInput ? noteInput.value : '').trim();
+  if (!topicTitle) {
+    msgEl.textContent = T('من فضلك اكتب موضوع المحاضرة');
+    msgEl.className = 'um-msg error show';
+    return;
+  }
+  try {
+    const res = await authFetch('/api/training-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topicTitle, note })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      msgEl.textContent = T('✅ تم إرسال طلبك للسيفتي بنجاح');
+      msgEl.className = 'um-msg success show';
+      topicInput.value = '';
+      if (noteInput) noteInput.value = '';
+      loadMyTrainingRequests();
+    } else {
+      msgEl.textContent = data.error || T('حصل خطأ أثناء إرسال الطلب');
+      msgEl.className = 'um-msg error show';
+    }
+  } catch (e) {
+    msgEl.textContent = T('خطأ في الاتصال');
+    msgEl.className = 'um-msg error show';
+  }
+}
+
+const TRN_REQ_STATUS_MAP = {
+  pending: { label: '⏳ قيد المراجعة', bg: '#fef3c7', color: '#b45309', border: '#fde68a' },
+  scheduled: { label: '✅ هيتم جدولتها', bg: '#dcfce7', color: '#15803d', border: '#86efac' },
+  // "تمت" — بتتحدد تلقائيًا لما تتعمل محاضرة حية بنفس عنوان الطلب (إضافة 15 سبتمبر 2026)
+  completed: { label: '🎉 تمت', bg: '#dbeafe', color: '#1d4ed8', border: '#93c5fd' },
+  declined: { label: '❌ مرفوض', bg: '#fee2e2', color: '#b91c1c', border: '#f87171' }
+};
+
+async function loadMyTrainingRequests() {
+  const listEl = document.getElementById('trnReqMineList');
+  if (!listEl) return;
+  try {
+    const res = await authFetch('/api/training-requests/mine');
+    const data = await res.json().catch(() => ({}));
+    const requests = Array.isArray(data) ? data : (data.requests || []);
+    if (!requests.length) {
+      listEl.innerHTML = T('<div class="empty">لسه معملتش أي طلب محاضرة.</div>');
+      return;
+    }
+    listEl.innerHTML = `
+      <div class="um-table-wrap">
+        <table class="um-table">
+          <thead><tr><th>${T("التاريخ")}</th><th>${T("الموضوع")}</th><th>${T("الحالة")}</th></tr></thead>
+          <tbody>
+            ${requests.map(r => {
+              const st = TRN_REQ_STATUS_MAP[r.status] || TRN_REQ_STATUS_MAP.pending;
+              return `
+              <tr>
+                <td style="font-size:12px; color:var(--muted);">${escapeHtml(new Date(r.createdAt || Date.now()).toLocaleDateString('ar-EG'))}</td>
+                <td style="font-weight:700; font-size:13px;">${escapeHtml(r.topicTitle || '')}</td>
+                <td style="font-size:12px; font-weight:700;"><span style="background:${st.bg}; color:${st.color}; border:1px solid ${st.border}; padding:4px 8px; border-radius:6px; font-weight:bold; font-size:11px; white-space:nowrap; display:inline-block;">${T(st.label)}</span></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
   } catch (e) {
     console.error(e);
   }
@@ -6538,8 +7208,88 @@ async function loadAdminTraining(isSilent = false) {
 
     // Re-apply trainer fields after data loads (allEmployees may now be available)
     window.populateTrainerInfo();
+
+    // طلبات محاضرات العمال — إضافة 14 سبتمبر 2026 (مش محتاجة تتحدّث كل 3
+    // ثواني زي الجلسات الحية، فبتتحمّل بس لما الشاشة تتفتح/تتحدّث عادي)
+    if (!isSilent) loadTrainingRequestsAdmin();
   } catch (err) {
     console.error('Handled loadAdminTraining error:', err);
+  }
+}
+
+// طلبات محاضرات العمال (للسيفتي/السوبر) — عرض فقط لحسابات المتابعة
+// (ceo/hse_director)، وأزرار قبول/رفض لـ hse_admin/super_admin فقط.
+async function loadTrainingRequestsAdmin() {
+  const listEl = document.getElementById('trnRequestsAdminList');
+  if (!listEl) return;
+  const isSafetyOrSuper = (currentUserRole === 'hse_admin' || currentUserRole === 'super_admin');
+  const isViewerRole = VIEWER_ROLES_UI.includes(currentUserRole);
+  if (!isSafetyOrSuper && !isViewerRole) {
+    listEl.innerHTML = '';
+    return;
+  }
+  try {
+    const res = await authFetch('/api/training-requests');
+    if (!res.ok) { listEl.innerHTML = ''; return; }
+    const data = await res.json().catch(() => ({}));
+    const requests = Array.isArray(data) ? data : (data.requests || []);
+    if (!requests.length) {
+      listEl.innerHTML = T('<div class="empty">لا توجد طلبات محاضرات حاليًا.</div>');
+      return;
+    }
+    listEl.innerHTML = `
+      <div class="um-table-wrap">
+        <table class="um-table">
+          <thead><tr><th>${T("التاريخ")}</th><th>${T("العامل")}</th><th>${T("الموضوع")}</th><th>${T("ملاحظة")}</th><th>${T("الحالة")}</th>${isSafetyOrSuper ? `<th>${T("إجراء")}</th>` : ''}</tr></thead>
+          <tbody>
+            ${requests.map(r => {
+              const st = TRN_REQ_STATUS_MAP[r.status] || TRN_REQ_STATUS_MAP.pending;
+              const actionsHtml = isSafetyOrSuper ? `
+                <td style="white-space:nowrap;">
+                  ${r.status === 'pending' ? `
+                    <button class="submit-btn" style="padding:4px 10px; font-size:11px;" onclick="decideTrainingRequest('${r.id}','scheduled')">${T("✅ قبول")}</button>
+                    <button class="logout-btn" style="padding:4px 10px; font-size:11px;" onclick="decideTrainingRequest('${r.id}','declined')">${T("❌ رفض")}</button>
+                  ` : `
+                    <button class="logout-btn" style="padding:4px 10px; font-size:11px;" onclick="decideTrainingRequest('${r.id}','pending')">${T("↩️ رجوع لقيد المراجعة")}</button>
+                  `}
+                </td>` : '';
+              return `
+              <tr>
+                <td style="font-size:12px; color:var(--muted);">${escapeHtml(new Date(r.createdAt || Date.now()).toLocaleDateString('ar-EG'))}</td>
+                <td style="font-size:12px;">${escapeHtml(r.workerName || r.empCode || '')}</td>
+                <td style="font-weight:700; font-size:13px;">${escapeHtml(r.topicTitle || '')}</td>
+                <td style="font-size:12px; color:var(--muted);">${escapeHtml(r.note || '-')}</td>
+                <td style="font-size:12px; font-weight:700;"><span style="background:${st.bg}; color:${st.color}; border:1px solid ${st.border}; padding:4px 8px; border-radius:6px; font-weight:bold; font-size:11px; white-space:nowrap; display:inline-block;">${T(st.label)}</span></td>
+                ${actionsHtml}
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function decideTrainingRequest(id, status) {
+  let responseNote = '';
+  if (status === 'declined') {
+    responseNote = prompt(T('سبب الرفض (اختياري):')) || '';
+  }
+  try {
+    const res = await authFetch(`/api/training-requests/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, responseNote })
+    });
+    if (res.ok) {
+      loadTrainingRequestsAdmin();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || T('حصل خطأ أثناء تحديث الطلب'));
+    }
+  } catch (e) {
+    alert(T('خطأ في الاتصال'));
   }
 }
 
@@ -6635,10 +7385,11 @@ function renderAdminLiveSessions(trainings) {
             </table>
           </div>
           
-          <div style="display:flex; gap:8px;">
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
             <button class="submit-btn" style="flex:1; background:var(--danger);" onclick="closeTrainingSession('${trn.id}')">${T("🛑 إنهاء وإغلاق المحاضرة")}</button>
             <button class="um-btn" style="flex:1;" onclick="addManualTrnAttendee('${trn.id}')">${T("➕ إضافة حضور يدوي")}</button>
             <button class="um-btn" style="flex:1;" onclick="exportTrainingExcel('${trn.id}')">${T("📥 تصدير Excel")}</button>
+            <button class="um-btn" style="flex:1;" onclick="openTrainingMediaModal('${trn.id}')">${T("🎥 تسجيل واختبار")}</button>
           </div>
         </div>
       </div>`;
@@ -6664,6 +7415,7 @@ function renderAdminLiveSessions(trainings) {
           </div>
           <div>
             <button class="um-btn" onclick="exportTrainingExcel('${trn.id}')" style="padding:6px 12px; font-size:12px;">📥 Excel</button>
+            <button class="um-btn" onclick="openTrainingMediaModal('${trn.id}')" style="padding:6px 12px; font-size:12px; margin-inline-start:4px;">${T("🎥 تسجيل واختبار")}</button>
             <button class="um-btn del" onclick="softDeleteTraining('${trn.id}')" style="padding:6px 12px; font-size:12px; margin-inline-start:4px;">${T("🗑️ حذف")}</button>
           </div>
         </div>
@@ -6807,9 +7559,34 @@ async function uploadTrainingsExcel(event) {
   reader.readAsDataURL(file);
 }
 
+// إظهار/إخفاء حقل القسم أو حقل أكواد العمال حسب وضع الاستهداف المختار —
+// إضافة 15 سبتمبر 2026 (جزء من تفعيل "الفئة المستهدفة" فعليًا بدل ما تكون
+// نص وصفي بلا تأثير).
+async function onTrnTargetModeChange() {
+  const mode = document.getElementById('trn_targetMode').value;
+  const extraRow = document.getElementById('trn_targetExtraRow');
+  const deptWrap = document.getElementById('trn_targetDeptWrap');
+  const codesWrap = document.getElementById('trn_targetCodesWrap');
+  if (mode === 'all') {
+    extraRow.style.display = 'none';
+    return;
+  }
+  extraRow.style.display = 'grid';
+  deptWrap.style.display = mode === 'department' ? 'block' : 'none';
+  codesWrap.style.display = mode === 'workers' ? 'block' : 'none';
+  if (mode === 'department') {
+    const deptSelect = document.getElementById('trn_targetDept');
+    if (deptSelect && !deptSelect.dataset.loaded) {
+      const depts = await loadRealDepartments();
+      deptSelect.innerHTML = depts.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+      deptSelect.dataset.loaded = '1';
+    }
+  }
+}
+
 async function createTrainingSession() {
   const title = document.getElementById('trn_topic').value.trim();
-  const tgroup = document.getElementById('trn_targetGroup').value;
+  const targetMode = document.getElementById('trn_targetMode').value;
   const date = document.getElementById('trn_date').value;
   const loc = document.getElementById('trn_location').value;
   const stime = document.getElementById('trn_startTime').value;
@@ -6817,21 +7594,39 @@ async function createTrainingSession() {
   const trainer = (document.getElementById('trn_trainer')?.value || '').trim();
   const trainerCode = (document.getElementById('trn_trainerCode')?.value || '').trim();
   const msgEl = document.getElementById('trn_createMsg');
-  
+
   if (!title || !date || !stime || !etime) {
     msgEl.textContent = T('الرجاء ملء جميع الحقول المطلوبة (*)');
     msgEl.className = 'wl-msg error show';
     return;
   }
-  
+
+  let targetDept = '';
+  let targetEmpCodes = '';
+  if (targetMode === 'department') {
+    targetDept = (document.getElementById('trn_targetDept')?.value || '').trim();
+    if (!targetDept) {
+      msgEl.textContent = T('اختر القسم المستهدف');
+      msgEl.className = 'wl-msg error show';
+      return;
+    }
+  } else if (targetMode === 'workers') {
+    targetEmpCodes = (document.getElementById('trn_targetCodes')?.value || '').trim();
+    if (!targetEmpCodes) {
+      msgEl.textContent = T('اكتب كود أو أكواد العمال المستهدفين');
+      msgEl.className = 'wl-msg error show';
+      return;
+    }
+  }
+
   const pin = Math.floor(1000 + Math.random() * 9000).toString();
-  
+
   try {
     const res = await authFetch('/api/trainings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        title, targetGroup: tgroup, date, location: loc, startTime: stime, endTime: etime, sessionPin: pin, trainer, trainerCode
+        title, targetMode, targetDept, targetEmpCodes, date, location: loc, startTime: stime, endTime: etime, sessionPin: pin, trainer, trainerCode
       })
     });
     const data = await res.json();
@@ -6839,7 +7634,10 @@ async function createTrainingSession() {
       msgEl.textContent = T('✅ تم إنشاء المحاضرة بنجاح');
       msgEl.className = 'wl-msg success show';
       document.getElementById('trn_topic').value = '';
-      document.getElementById('trn_targetGroup').value = '';
+      document.getElementById('trn_targetMode').value = 'all';
+      onTrnTargetModeChange();
+      if (document.getElementById('trn_targetDept')) document.getElementById('trn_targetDept').value = '';
+      if (document.getElementById('trn_targetCodes')) document.getElementById('trn_targetCodes').value = '';
       document.getElementById('trn_location').value = '';
       if (document.getElementById('trn_trainer')) document.getElementById('trn_trainer').value = '';
       if (document.getElementById('trn_trainerCode')) document.getElementById('trn_trainerCode').value = '';
@@ -6864,6 +7662,434 @@ async function closeTrainingSession(id) {
     const res = await authFetch(`/api/trainings/${id}/close`, { method: 'PUT' });
     if (res.ok) loadAdminTraining(true);
   } catch(e) {}
+}
+
+// ============================================================
+// 🎥📝 تسجيل المحاضرة + الاختبار — إدارة (Safety/Super Admin)
+// إضافة 15 سبتمبر 2026
+// ============================================================
+let _quizBuilderState = { trainingId: null, questions: [] };
+
+function openTrainingMediaModal(trainingId) {
+  const trn = (_allAdminTrainings || []).find(t => t.id === trainingId);
+  if (!trn) { alert(T('تعذر إيجاد المحاضرة')); return; }
+  _quizBuilderState = {
+    trainingId,
+    questions: (trn.quiz && Array.isArray(trn.quiz.questions))
+      ? trn.quiz.questions.map(q => ({ text: q.text, options: [...q.options], correctIndex: q.correctIndex }))
+      : []
+  };
+  const passThreshold = (trn.quiz && trn.quiz.passThreshold) || 70;
+  const recordingUrl = (trn.recording && trn.recording.url) || '';
+  const reviewWindowDays = Number.isFinite(trn.reviewWindowDays) ? trn.reviewWindowDays : 30;
+
+  // ملخص المهلة — عشان مسؤول السلامة يشوف بسرعة الوضع الحالي من غير ما
+  // يحسب بنفسه (إضافة 15 سبتمبر 2026).
+  let reviewSummary = T('المحاضرة لسه مش مقفولة — المهلة بتبدأ تتحسب من لحظة القفل.');
+  if (trn.closedAt) {
+    if (!reviewWindowDays) {
+      reviewSummary = T('بدون حد — التسجيل والاختبار متاحين للعامل للأبد.');
+    } else {
+      const deadline = new Date(new Date(trn.closedAt).getTime() + reviewWindowDays * 86400000);
+      const daysLeft = Math.ceil((deadline.getTime() - Date.now()) / 86400000);
+      reviewSummary = daysLeft > 0
+        ? `${T('باقي')} ${daysLeft} ${T('يوم على انتهاء المراجعة')} (${deadline.toLocaleDateString('ar-EG')})`
+        : T('⚠️ انتهت مدة المراجعة — العامل مايقدرش يشوف التسجيل ولا ياخد الاختبار دلوقتي.');
+    }
+  }
+
+  const html = `
+    <h3 style="margin-top:0;">🎥 ${T('تسجيل ومسابقة')} — ${escapeHtml(trn.title)}</h3>
+
+    <div class="qm-section">
+      <div class="app-modal-field">
+        <label>${T("رابط تسجيل المحاضرة (يوتيوب غير مُدرج / درايف / أي رابط https)")}</label>
+        <input type="text" id="qmRecordingUrl" value="${escapeHtml(recordingUrl)}" placeholder="https://..." />
+      </div>
+      <div class="app-modal-field">
+        <label>${T("أو ارفع ملف فيديو مباشرة (حتى ~1.5 جيجا — لتسجيلات أكبر استخدم رابط)")}</label>
+        <input type="file" id="qmRecordingFile" accept="video/*" onchange="qmFilePicked(this)" />
+        <div id="qmFileInfo" class="qm-file-info"></div>
+      </div>
+      <div id="qmUploadProgressWrap" class="qm-progress-wrap" hidden>
+        <div class="qm-progress-bar"><div id="qmUploadProgressFill" class="qm-progress-fill" style="width:0%"></div></div>
+        <div id="qmUploadProgressText" class="qm-progress-text">0%</div>
+      </div>
+      <div class="app-modal-error" id="qmRecordingMsg"></div>
+      <div class="app-modal-actions" style="margin-bottom:4px;">
+        <button class="submit-btn" type="button" id="qmSaveRecordingBtn" onclick="saveTrainingRecording('${trn.id}')">${T("💾 حفظ التسجيل")}</button>
+      </div>
+    </div>
+
+    <hr class="qm-divider">
+
+    <div class="qm-section">
+      <h4 class="qm-section-title">📝 ${T("اختبار المحاضرة")}</h4>
+      <div class="app-modal-field">
+        <label>${T("نسبة النجاح المطلوبة % (العامل اللي ماياخدهاش يتلغي تأكيد حضوره)")}</label>
+        <input type="number" id="qmPassThreshold" min="0" max="100" value="${passThreshold}" />
+      </div>
+      <div id="qmQuestionsList"></div>
+      <button class="um-btn" type="button" onclick="qmAddQuestion()">${T("➕ إضافة سؤال")}</button>
+      <div class="app-modal-error" id="qmQuizMsg"></div>
+      <div class="app-modal-actions" style="margin-bottom:4px;">
+        <button class="submit-btn" type="button" onclick="saveTrainingQuiz('${trn.id}')">${T("💾 حفظ الاختبار")}</button>
+      </div>
+    </div>
+
+    <hr class="qm-divider">
+
+    <div class="qm-section">
+      <h4 class="qm-section-title">🔓 ${T("إعادة فتح الاختبار")}</h4>
+      <p class="qm-hint">${T("الاختبار مرة واحدة بس افتراضيًا لكل عامل. هنا تقدر تفتحه تاني للكل، أو لعامل واحد بالتحديد.")}</p>
+      <div class="qm-btn-row">
+        <button class="um-btn" type="button" onclick="reopenTrainingQuiz('${trn.id}', 'all')">${T("🔓 فتح للكل")}</button>
+        <button class="um-btn" type="button" onclick="reopenTrainingQuiz('${trn.id}', 'worker')">${T("🔓 فتح لعامل معيّن")}</button>
+      </div>
+      <div class="app-modal-error" id="qmReopenMsg"></div>
+    </div>
+
+    <hr class="qm-divider">
+
+    <div class="qm-section">
+      <h4 class="qm-section-title">⏳ ${T("مدة إتاحة المراجعة للعامل")}</h4>
+      <p class="qm-hint">${T("بعد قفل المحاضرة، لحد كام يوم العامل يقدر يشوف التسجيل ويعمل/يعيد الاختبار؟ (0 = بدون حد)")}</p>
+      <p class="qm-review-summary">${reviewSummary}</p>
+      <div class="qm-btn-row">
+        <input type="number" id="qmReviewWindowDays" min="0" max="365" value="${reviewWindowDays}" style="max-width:110px;">
+        <button class="um-btn" type="button" onclick="saveReviewWindow('${trn.id}')">${T("💾 حفظ المهلة")}</button>
+      </div>
+      <div class="app-modal-error" id="qmReviewWindowMsg"></div>
+    </div>
+  `;
+  openAppModal(html);
+  qmRenderQuestions();
+}
+
+function qmShowMsg(id, text, isError) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isError ? 'var(--danger)' : 'var(--success)';
+  el.style.display = text ? 'block' : 'none';
+}
+
+function qmFilePicked(input) {
+  const info = document.getElementById('qmFileInfo');
+  if (!info) return;
+  const file = input.files && input.files[0];
+  if (!file) { info.textContent = ''; return; }
+  const mb = (file.size / (1024 * 1024)).toFixed(1);
+  info.textContent = `${escapeHtml(file.name)} — ${mb} ${T('ميجا')}`;
+}
+
+async function saveReviewWindow(trainingId) {
+  const days = parseInt(document.getElementById('qmReviewWindowDays').value, 10);
+  try {
+    const res = await authFetch(`/api/trainings/${trainingId}/review-window`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days: Number.isFinite(days) ? days : 30 })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      qmShowMsg('qmReviewWindowMsg', T('✅ تم حفظ المهلة'), false);
+      loadAdminTraining(true);
+    } else {
+      qmShowMsg('qmReviewWindowMsg', data.error || T('حصل خطأ'), true);
+    }
+  } catch (e) {
+    qmShowMsg('qmReviewWindowMsg', T('خطأ في الاتصال'), true);
+  }
+}
+
+function qmRenderQuestions() {
+  const wrap = document.getElementById('qmQuestionsList');
+  if (!wrap) return;
+  wrap.innerHTML = _quizBuilderState.questions.map((q, qi) => `
+    <div class="qm-q-card">
+      <div class="qm-q-card-head">
+        <span class="qm-q-badge">${qi + 1}</span>
+        <input type="text" class="qm-q-text" value="${escapeHtml(q.text)}" placeholder="${T("نص السؤال")}" onchange="qmUpdateQuestionText(${qi}, this.value)" />
+        <button type="button" class="qm-q-del" onclick="qmRemoveQuestion(${qi})" title="${T('حذف السؤال')}">🗑️</button>
+      </div>
+      <div class="qm-q-options">
+        ${[0, 1, 2, 3].map(oi => `
+          <label class="qm-q-option ${q.correctIndex === oi ? 'is-correct' : ''}">
+            <input type="radio" name="qmCorrect${qi}" ${q.correctIndex === oi ? 'checked' : ''} onchange="qmSetCorrect(${qi}, ${oi})" title="${T('الإجابة الصحيحة')}">
+            <input type="text" value="${escapeHtml(q.options[oi] || '')}" placeholder="${T("خيار")} ${oi + 1}" onchange="qmUpdateOption(${qi}, ${oi}, this.value)">
+          </label>
+        `).join('')}
+      </div>
+    </div>
+  `).join('') || `<div class="empty">${T('مفيش أسئلة لسه — دوس "إضافة سؤال"')}</div>`;
+}
+function qmAddQuestion() {
+  _quizBuilderState.questions.push({ text: '', options: ['', '', '', ''], correctIndex: 0 });
+  qmRenderQuestions();
+}
+function qmRemoveQuestion(i) {
+  _quizBuilderState.questions.splice(i, 1);
+  qmRenderQuestions();
+}
+function qmUpdateQuestionText(i, val) { _quizBuilderState.questions[i].text = val; }
+function qmUpdateOption(i, oi, val) { _quizBuilderState.questions[i].options[oi] = val; }
+function qmSetCorrect(i, oi) { _quizBuilderState.questions[i].correctIndex = oi; qmRenderQuestions(); }
+
+// رفع التسجيل — إضافة 15 سبتمبر 2026 (تحديث نفس اليوم): بث خام (XHR عشان
+// نقدر نتابع نسبة الرفع) بدل base64 القديم، وشريط تقدّم فعلي بدل ما
+// الشاشة تفضل ساكنة لحد ما ملف كبير يخلص رفعه.
+async function saveTrainingRecording(trainingId) {
+  const url = document.getElementById('qmRecordingUrl').value.trim();
+  const fileInput = document.getElementById('qmRecordingFile');
+  const file = fileInput && fileInput.files && fileInput.files[0];
+  qmShowMsg('qmRecordingMsg', '', false);
+
+  if (file) {
+    if (file.size > 1536 * 1024 * 1024) {
+      qmShowMsg('qmRecordingMsg', T('حجم الملف أكبر من 1.5 جيجا — استخدم رابط فيديو خارجي بدل كده'), true);
+      return;
+    }
+    const ext = (file.name.split('.').pop() || 'mp4').toLowerCase().replace(/[^a-z0-9]/g, '') || 'mp4';
+    const progressWrap = document.getElementById('qmUploadProgressWrap');
+    const progressFill = document.getElementById('qmUploadProgressFill');
+    const progressText = document.getElementById('qmUploadProgressText');
+    const saveBtn = document.getElementById('qmSaveRecordingBtn');
+    if (progressWrap) progressWrap.hidden = false;
+    if (saveBtn) saveBtn.disabled = true;
+
+    try {
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `/api/trainings/${trainingId}/recording/upload?ext=${encodeURIComponent(ext)}`);
+        const token = getToken();
+        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        xhr.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return;
+          const pct = Math.round((e.loaded / e.total) * 100);
+          if (progressFill) progressFill.style.width = pct + '%';
+          if (progressText) progressText.textContent = pct + '%';
+        };
+        xhr.onload = () => {
+          let data = {};
+          try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(data);
+          } else {
+            reject(new Error(data.error || T('حصل خطأ')));
+          }
+        };
+        xhr.onerror = () => reject(new Error(T('خطأ في الاتصال')));
+        xhr.send(file);
+      });
+      qmShowMsg('qmRecordingMsg', T('✅ تم حفظ التسجيل'), false);
+      loadAdminTraining(true);
+    } catch (e) {
+      qmShowMsg('qmRecordingMsg', e.message || T('حصل خطأ'), true);
+    } finally {
+      if (progressWrap) progressWrap.hidden = true;
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  } else if (url) {
+    try {
+      const res = await authFetch(`/api/trainings/${trainingId}/recording`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ videoUrl: url })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        qmShowMsg('qmRecordingMsg', T('✅ تم حفظ التسجيل'), false);
+        loadAdminTraining(true);
+      } else {
+        qmShowMsg('qmRecordingMsg', data.error || T('حصل خطأ'), true);
+      }
+    } catch (e) {
+      qmShowMsg('qmRecordingMsg', T('خطأ في الاتصال'), true);
+    }
+  } else {
+    qmShowMsg('qmRecordingMsg', T('حط رابط فيديو أو ارفع ملف'), true);
+  }
+}
+
+async function saveTrainingQuiz(trainingId) {
+  const passThreshold = parseInt(document.getElementById('qmPassThreshold').value, 10) || 70;
+  const questions = _quizBuilderState.questions.map(q => ({
+    text: (q.text || '').trim(),
+    options: (q.options || []).map(o => (o || '').trim()).filter(Boolean),
+    correctIndex: q.correctIndex
+  }));
+  if (!questions.length) {
+    qmShowMsg('qmQuizMsg', T('ضيف سؤال واحد على الأقل'), true);
+    return;
+  }
+  try {
+    const res = await authFetch(`/api/trainings/${trainingId}/quiz`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passThreshold, questions })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      qmShowMsg('qmQuizMsg', T('✅ تم حفظ الاختبار'), false);
+      loadAdminTraining(true);
+    } else {
+      qmShowMsg('qmQuizMsg', data.error || T('حصل خطأ'), true);
+    }
+  } catch (e) {
+    qmShowMsg('qmQuizMsg', T('خطأ في الاتصال'), true);
+  }
+}
+
+async function reopenTrainingQuiz(trainingId, scope) {
+  let empCode = '';
+  if (scope === 'worker') {
+    empCode = prompt(T('كود العامل:'));
+    if (!empCode || !empCode.trim()) return;
+  }
+  const timesStr = prompt(T('كام محاولة إضافية؟ (سيب فاضي = 1)'), '1');
+  if (timesStr === null) return;
+  const times = parseInt(timesStr, 10) || 1;
+  try {
+    const res = await authFetch(`/api/trainings/${trainingId}/quiz/reopen`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, empCode: (empCode || '').trim(), times })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      qmShowMsg('qmReopenMsg', T('✅ تم فتح الاختبار'), false);
+    } else {
+      qmShowMsg('qmReopenMsg', data.error || T('حصل خطأ'), true);
+    }
+  } catch (e) {
+    qmShowMsg('qmReopenMsg', T('خطأ في الاتصال'), true);
+  }
+}
+
+// عرض تسجيل المحاضرة للعامل — فيديو مرفوع على السيرفر بيتعرض جوه الصفحة
+// مباشرة (<video>)، ورابط خارجي (يوتيوب/درايف) بيتفتح في تاب جديد لأن
+// أغلب الروابط دي مش قابلة للتضمين المباشر (إضافة 15 سبتمبر 2026).
+function openWorkerRecordingModal(url) {
+  if (!url) return;
+  const isLocalFile = url.startsWith('/uploads/trainings/');
+  const html = isLocalFile
+    ? `
+      <h3 style="margin-top:0;">🎥 ${T("تسجيل المحاضرة")}</h3>
+      <video controls preload="metadata" class="wq-video-player" src="${escapeHtml(url)}"></video>
+    `
+    : `
+      <h3 style="margin-top:0;">🎥 ${T("تسجيل المحاضرة")}</h3>
+      <p style="font-size:13px; color:var(--muted);">${T("التسجيل ده رابط خارجي — هيتفتح في تاب جديد.")}</p>
+      <div class="app-modal-actions">
+        <a class="submit-btn" style="text-decoration:none; text-align:center;" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${T("🔗 فتح التسجيل")}</a>
+      </div>
+    `;
+  openAppModal(html);
+}
+
+// ============================================================
+// 📝 اختبار المحاضرة — واجهة العامل (Worker quiz-taking modal)
+// إضافة 15 سبتمبر 2026
+// ============================================================
+let _workerQuizState = { trainingId: null, questions: [], answers: [] };
+
+async function openWorkerQuizModal(trainingId) {
+  try {
+    const res = await authFetch(`/api/trainings/${trainingId}/quiz`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      // انتهت مدة المراجعة (إضافة 15 سبتمبر 2026) — رسالة مخصصة بدل الرسالة العامة.
+      if (data.reviewExpired) {
+        openAppModal(`
+          <h3 style="margin-top:0;">📝 ${T("اختبار المحاضرة")}</h3>
+          <p class="wq-expired-note">⏳ ${T("انتهت مدة إتاحة هذا الاختبار للمراجعة.")}</p>
+        `);
+        return;
+      }
+      alert(data.error || T('تعذر تحميل الاختبار'));
+      return;
+    }
+    _workerQuizState = { trainingId, questions: data.questions || [], answers: new Array((data.questions || []).length).fill(null) };
+    if (!data.canAttempt) {
+      openAppModal(`
+        <h3 style="margin-top:0;">📝 ${T("اختبار المحاضرة")}</h3>
+        <p>${T("استنفدت عدد محاولات الاختبار المسموح بها.")} ${data.myAttempt ? (T('آخر نتيجة: ') + data.myAttempt.lastScore + '%') : ''}</p>
+        <p style="font-size:13px; color:var(--muted);">${T("اطلب من مسؤول السلامة يفتحلك محاولة إضافية.")}</p>
+      `);
+      return;
+    }
+    renderWorkerQuizModal(data.passThreshold, data.remainingAttempts);
+  } catch (e) {
+    alert(T('خطأ في الاتصال'));
+  }
+}
+
+function renderWorkerQuizModal(passThreshold, remainingAttempts) {
+  const total = _workerQuizState.questions.length;
+  const html = `
+    <h3 style="margin-top:0;">📝 ${T("اختبار المحاضرة")}</h3>
+    <div class="wq-meta-row">
+      <span class="wq-meta-chip">🎯 ${T("نسبة النجاح")}: ${passThreshold}%</span>
+      <span class="wq-meta-chip">🔁 ${T("المحاولات المتبقية")}: ${remainingAttempts}</span>
+    </div>
+    <div id="wqQuestionsList">
+      ${_workerQuizState.questions.map((q, qi) => `
+        <div class="wq-q-card">
+          <div class="wq-q-title"><span class="wq-q-badge">${qi + 1}</span> ${escapeHtml(q.text)}</div>
+          <div class="wq-q-options">
+            ${q.options.map((opt, oi) => `
+              <label class="wq-q-option" id="wqOpt${qi}_${oi}">
+                <input type="radio" name="wqAnswer${qi}" onchange="wqSetAnswer(${qi}, ${oi})">
+                <span>${escapeHtml(opt)}</span>
+              </label>
+            `).join('')}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <p id="wqProgressNote" class="wq-progress-note">${T("جاوبت على")} 0 ${T("من")} ${total}</p>
+    <div class="app-modal-error" id="wqMsg"></div>
+    <div class="app-modal-actions">
+      <button class="submit-btn" type="button" onclick="submitWorkerQuiz()">${T("✅ تسليم الإجابات")}</button>
+    </div>
+  `;
+  openAppModal(html);
+}
+
+function wqSetAnswer(qi, oi) {
+  _workerQuizState.answers[qi] = oi;
+  // خلي الخيار المختار يبان بصريًا، وحدّث عداد "جاوبت على كام سؤال"
+  // (تحسين شكل الاختبار — إضافة 15 سبتمبر 2026).
+  const optionsWrap = document.querySelectorAll(`[id^="wqOpt${qi}_"]`);
+  optionsWrap.forEach(el => el.classList.remove('is-selected'));
+  const chosen = document.getElementById(`wqOpt${qi}_${oi}`);
+  if (chosen) chosen.classList.add('is-selected');
+  const answered = _workerQuizState.answers.filter(a => a !== null).length;
+  const note = document.getElementById('wqProgressNote');
+  if (note) note.textContent = `${T("جاوبت على")} ${answered} ${T("من")} ${_workerQuizState.questions.length}`;
+}
+
+async function submitWorkerQuiz() {
+  if (_workerQuizState.answers.some(a => a === null)) {
+    qmShowMsg('wqMsg', T('جاوب على كل الأسئلة الأول'), true);
+    return;
+  }
+  try {
+    const res = await authFetch(`/api/trainings/${_workerQuizState.trainingId}/quiz/submit`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers: _workerQuizState.answers })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      const resultHtml = data.passed
+        ? `<div class="wq-result-hero wq-result-pass"><div class="wq-result-icon">🎉</div><h3>${T("مبروك، نجحت!")}</h3><p class="wq-result-score">${data.score}%</p></div>`
+        : `<div class="wq-result-hero wq-result-fail"><div class="wq-result-icon">❌</div><h3>${T("للأسف رسبت")}</h3><p class="wq-result-score">${data.score}% <span class="wq-result-required">(${T("المطلوب")} ${data.passThreshold}%)</span></p><p class="wq-hint">${T("تم إلغاء تأكيد حضورك. اطلب من مسؤول السلامة يفتحلك الاختبار تاني لو محتاج تعيد.")}</p></div>`;
+      openAppModal(resultHtml);
+      loadWorkerTraining();
+    } else if (data.reviewExpired) {
+      qmShowMsg('wqMsg', T('انتهت مدة إتاحة هذا الاختبار للمراجعة.'), true);
+    } else {
+      qmShowMsg('wqMsg', data.error || T('حصل خطأ'), true);
+    }
+  } catch (e) {
+    qmShowMsg('wqMsg', T('خطأ في الاتصال'), true);
+  }
 }
 
 async function toggleTrnVerification(id, empCode, verified) {
@@ -7596,38 +8822,50 @@ function stopNotificationPolling() {
 }
 
 async function subscribeToPushNotifications() {
-  return;
-  // if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-  
-  // try {
-  //   const swReg = await navigator.serviceWorker.register('/sw.js');
-    
-  //   // Request Permission
-  //   const permission = await Notification.requestPermission();
-  //   if (permission !== 'granted') return;
-    
-  //   // Get VAPID Key
-  //   const vapidRes = await fetch('/api/vapid-public-key');
-  //   const vapidData = await vapidRes.json();
-  //   if (!vapidData.publicKey) return;
-    
-  //   const applicationServerKey = urlB64ToUint8Array(vapidData.publicKey);
-    
-  //   const subscription = await swReg.pushManager.subscribe({
-  //     userVisibleOnly: true,
-  //     applicationServerKey: applicationServerKey
-  //   });
-    
-  //   // Send to Backend
-  //   const empCode = currentEmployee ? currentEmployee.empCode : (sessionRole !== 'none' ? 'admin' : '');
-  //   await fetch('/api/notifications/subscribe', {
-  //     method: 'POST',
-  //     headers: { 'Content-Type': 'application/json' },
-  //     body: JSON.stringify({ subscription, role: sessionRole, empCode: empCode })
-  //   });
-  // } catch (error) {
-  //   console.error('Push Subscription Failed:', error);
-  // }
+  // حسابات المتابعة العليا (CEO/HSE Director) أصلاً السيرفر بيرفض يسجّلهم —
+  // مفيش داعي نزعجهم بطلب إذن إشعارات مش هتوصلهم أي حاجة عليه.
+  if (typeof VIEWER_ROLES_UI !== 'undefined' && VIEWER_ROLES_UI.includes(currentUserRole)) return;
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+
+  try {
+    const swReg = await navigator.serviceWorker.register('/sw.js');
+
+    // Request Permission
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') return;
+
+    // لو فيه اشتراك قديم بمفتاح VAPID مختلف عن الحالي (مثلًا السيرفر اتعمله
+    // reset)، push manager بيرفض تسجيل اشتراك جديد بمفتاح مختلف — لازم نلغي
+    // القديم الأول.
+    const existing = await swReg.pushManager.getSubscription();
+
+    // Get VAPID Key
+    const vapidRes = await fetch('/api/vapid-public-key');
+    const vapidData = await vapidRes.json();
+    if (!vapidData.publicKey) return;
+
+    if (existing) {
+      try { await existing.unsubscribe(); } catch (e) { /* اتلغى بالفعل أو مش موجود أصلًا */ }
+    }
+
+    const applicationServerKey = urlB64ToUint8Array(vapidData.publicKey);
+
+    const subscription = await swReg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: applicationServerKey
+    });
+
+    // Send to Backend — لازم authFetch (مش fetch عادي) عشان الراوت محتاج
+    // جلسة مسجّل دخولها (Bearer token)، السيرفر بياخد الدور/الكود من
+    // الجلسة نفسها مش من الـ body.
+    await authFetch('/api/notifications/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription })
+    });
+  } catch (error) {
+    console.error('Push Subscription Failed:', error);
+  }
 }
 
 // Alias — login flows call subscribeUserToPush; the real implementation is above.
@@ -7746,6 +8984,85 @@ function renderNotifications() {
   }
 }
 
+// يوجّه فعليًا لمكان الإشعار (تاب + فتح تفاصيل عنصر معيّن لو موجود) — دالة
+// مشتركة بين الضغط العادي على الإشعار جوه القايمة، والضغط على إشعار OS حقيقي
+// (Push، حتى لو التطبيق كان مقفول تمامًا). إضافة 14 سبتمبر 2026.
+function navigateToNotificationTarget(link, targetId, type) {
+  if (!link) return;
+  const tabMap = {
+    'tabPermits': 'sup',
+    'tabMyHistory': 'myhistory',
+    'tabSupHazard': 'supHazard',
+    'tabHazardWorker': 'hazardWorker',
+    'tabMyHazards': 'myhazards',
+    'tabTrainingWorker': 'trainingWorker',
+    'tabTrainingAdmin': 'trainingAdmin'
+  };
+  const mappedLink = tabMap[link] || link;
+  switchTab(mappedLink);
+  if (targetId) {
+    setTimeout(() => {
+      if (type === 'permit') {
+        const detailsEl = document.getElementById('details-' + targetId);
+        if (detailsEl) detailsEl.classList.add('show');
+      } else if (type === 'hazard') {
+        if (typeof showHazardModal === 'function') showHazardModal(targetId);
+      }
+    }, 500);
+  }
+}
+
+/**
+ * لو المستخدم فتح الصفحة عن طريق ضغطة على إشعار Push والتطبيق كان مقفول
+ * تمامًا (مفيش تاب فاتح خالص)، الـ Service Worker بيفتح رابط فيه كل بيانات
+ * التوجيه كـ query params (?openTab=...&targetId=...&nid=...). الدالة دي
+ * بتتأكد من وجودهم بعد ما الجلسة ترجع/يسجّل دخول، توجّه، وبعدين تمسحهم من
+ * الرابط عشان أي Refresh عادي بعد كده ميعيدش نفس التوجيه تاني.
+ */
+function applyPendingNotificationNavFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const openTab = params.get('openTab');
+    if (!openTab) return;
+    const targetId = params.get('targetId') || '';
+    const ntype = params.get('ntype') || '';
+    const nid = params.get('nid') || '';
+    if (nid) {
+      authFetch(`/api/notifications/read/${encodeURIComponent(nid)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      }).catch(() => {});
+    }
+    navigateToNotificationTarget(openTab, targetId, ntype);
+    // نظّف الرابط عشان مايتكررش التوجيه (بدون ما نعمل reload للصفحة)
+    history.replaceState(null, '', window.location.pathname);
+  } catch (e) { /* رابط غير متوقع — نتجاهله بهدوء */ }
+}
+
+// التطبيق فاتح فعلاً في تاب (حتى لو في الخلفية) وحصل ضغط على إشعار Push —
+// الـ Service Worker بيبعتلنا postMessage بدل ما يفتح تاب جديد.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    const msg = event.data || {};
+    if (msg.type !== 'notification-click') return;
+    let tabName = '', targetId = msg.targetId || '', ntype = msg.type || '', nid = '';
+    try {
+      const url = new URL(msg.url || '/', window.location.origin);
+      tabName = url.searchParams.get('openTab') || '';
+      nid = url.searchParams.get('nid') || '';
+    } catch (e) {}
+    if (nid) {
+      authFetch(`/api/notifications/read/${encodeURIComponent(nid)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      }).catch(() => {});
+    }
+    if (tabName) navigateToNotificationTarget(tabName, targetId, ntype);
+  });
+}
+
 async function handleNotificationClick(id, link, targetId, type) {
   // Mark read API
   const identifier = getIdentifier();
@@ -7754,40 +9071,19 @@ async function handleNotificationClick(id, link, targetId, type) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ empCode: identifier })
   });
-  
+
   // Local Update
   const notif = currentNotifications.find(n => n.id === id);
   if (notif && !notif.readBy.includes(identifier)) {
     notif.readBy.push(identifier);
     renderNotifications();
   }
-  
+
   if (isNotifDrawerOpen) toggleNotifDrawer();
-  
+
   // Navigate
   if (link) {
-    const tabMap = {
-      'tabPermits': 'sup',
-      'tabMyHistory': 'myhistory',
-      'tabSupHazard': 'supHazard',
-      'tabHazardWorker': 'hazardWorker',
-      'tabMyHazards': 'myhazards',
-      'tabTrainingWorker': 'trainingWorker',
-      'tabTrainingAdmin': 'trainingAdmin'
-    };
-    const mappedLink = tabMap[link] || link;
-    switchTab(mappedLink);
-    
-    if (targetId) {
-      setTimeout(() => {
-        if (type === 'permit') {
-          const detailsEl = document.getElementById('details-' + targetId);
-          if (detailsEl) detailsEl.classList.add('show');
-        } else if (type === 'hazard') {
-          if (typeof showHazardModal === 'function') showHazardModal(targetId);
-        }
-      }, 500);
-    }
+    navigateToNotificationTarget(link, targetId, type);
   }
 }
 

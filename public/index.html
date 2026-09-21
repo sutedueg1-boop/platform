@@ -428,6 +428,21 @@
             <div class="emp-badge-pill" id="empBadgePill"></div>
           </div>
 
+          <!-- 🎤 بلاغ/طلب صوتي — للعامل بس. إضافة 15 سبتمبر 2026 (بطلب
+               بشمهندس أحمد): زرار ثابت متاح من أي تبويب، يفتح نافذة تسجيل
+               صوتي بتحدد نوع الطلب (تصريح/بلاغ) وتوديه للمكان الصح جاهز
+               جزئيًا. الظهور الفعلي بيتحكم فيه applyRbacUI() في app.js. -->
+          <button
+            type="button"
+            id="voiceReportBtn"
+            class="voice-report-btn"
+            style="display: none"
+            onclick="openVoiceReportModal()"
+            title="بلاغ أو طلب بالصوت"
+          >
+            🎤
+          </button>
+
           <!-- بادج المستخدم الحالي (مدير/مشرف) + تسجيل الخروج — يظهر دايمًا في الشريط العلوي الثابت -->
           <div id="globalUserBar" class="global-user-bar" style="display: none">
             <div
@@ -1527,6 +1542,46 @@
         <!-- History Table -->
         <h3 class="section-title">سجل حضوري السابق</h3>
         <div id="trnWorkerHistoryList"></div>
+
+        <!-- طلب محاضرة معينة -->
+        <div class="ticket" style="margin-top: 20px; border-left: 5px solid var(--amber)">
+          <div class="ticket-body">
+            <h3 class="section-title" style="margin-top: 0">
+              🎓 عايز محاضرة معينة؟
+            </h3>
+            <p style="margin: 0 0 12px 0; font-size: 13px; color: #6b7280">
+              اطلب موضوع المحاضرة اللي محتاجها من السيفتي وهيتم مراجعة طلبك.
+            </p>
+            <div class="field">
+              <label>موضوع المحاضرة <span class="req-star">*</span></label>
+              <input
+                id="trnReqTopicInput"
+                type="text"
+                list="trnReqTopicsList"
+                placeholder="اكتب اسم موضوع المحاضرة"
+              />
+              <datalist id="trnReqTopicsList"></datalist>
+            </div>
+            <div class="field">
+              <label>ملاحظة (اختياري)</label>
+              <textarea
+                id="trnReqNoteInput"
+                rows="2"
+                placeholder="أي تفاصيل إضافية عن سبب الطلب..."
+              ></textarea>
+            </div>
+            <button class="submit-btn" onclick="submitTrainingRequest()">
+              📩 إرسال الطلب
+            </button>
+            <div id="trnReqMsg" class="wl-msg" style="margin-top: 8px"></div>
+          </div>
+        </div>
+
+        <!-- حالة طلباتي -->
+        <div style="margin-top: 20px">
+          <h3 class="section-title">📋 طلبات المحاضرات اللي بعتها</h3>
+          <div id="trnReqMineList"></div>
+        </div>
       </div>
 
       <!-- 🎓 TRAINING ADMIN VIEW -->
@@ -1597,10 +1652,28 @@
               </div>
               <div class="field">
                 <label>الفئة المستهدفة</label>
+                <select id="trn_targetMode" onchange="onTrnTargetModeChange()">
+                  <option value="all">الجميع</option>
+                  <option value="department">قسم معين</option>
+                  <option value="workers">عمال محددين (بالكود)</option>
+                </select>
+              </div>
+            </div>
+            <div
+              class="row2"
+              id="trn_targetExtraRow"
+              style="display: none; margin-top: -6px"
+            >
+              <div class="field" id="trn_targetDeptWrap" style="display: none">
+                <label>اختر القسم</label>
+                <select id="trn_targetDept"></select>
+              </div>
+              <div class="field" id="trn_targetCodesWrap" style="display: none">
+                <label>أكواد العمال (افصل بينهم بفاصلة)</label>
                 <input
                   type="text"
-                  id="trn_targetGroup"
-                  placeholder="مثال: عمال الانتاج, الجميع..."
+                  id="trn_targetCodes"
+                  placeholder="مثال: 123, 456 — أو كود واحد بس"
                 />
               </div>
             </div>
@@ -1703,6 +1776,12 @@
               style="margin-top: 8px"
             ></div>
           </div>
+        </div>
+
+        <!-- طلبات محاضرات من العمال -->
+        <div id="trnRequestsAdminSection" style="margin-bottom: 24px">
+          <h3 class="section-title">🎓 طلبات محاضرات من العمال</h3>
+          <div id="trnRequestsAdminList"></div>
         </div>
 
         <!-- Live Session Management -->
