@@ -11711,7 +11711,7 @@ async function renderReportsTab() {
     <div class="sup-header-row" style="margin-bottom:8px">
       <h3>${T('📑 تقرير السلامة الشامل')}</h3>
     </div>
-    <p class="rep-intro">${T('تقرير نصي كامل بكل أرقام السلامة والتارجتات (من غير رسومات) — جاهز للطباعة على ورق بشعار الشركة أو للإرسال بالإيميل. اختار النطاق والفترة واضغط "عرض التقرير".')}</p>
+    <p class="rep-intro">${T('تقرير مختصر: أهم أرقام السلامة والتارجت + الجزاءات ومين خدها — جاهز للطباعة بشعار الشركة، أو حفظه PDF، أو إرساله بالإيميل. اختار النطاق والفترة واضغط "عرض التقرير".')}</p>
 
     <div class="adv-filter-box rep-filters">
       <div class="adv-filter-grid">
@@ -11927,7 +11927,11 @@ async function reportsSavePdf() {
       silent: true,
       onProgress: t => { btn.textContent = t; },
     });
-    if (r) showToast(`${T('✅ اتحفظ ملف الـ PDF')} (${r.pages} ${T('صفحة')})`, 'success');
+    if (r) {
+      const n = r.pages;
+      const pagesTxt = n === 1 ? T('صفحة واحدة') : n === 2 ? T('صفحتين') : `${n} ${n <= 10 ? T('صفحات') : T('صفحة')}`;
+      showToast(`${T('✅ اتحفظ ملف الـ PDF')} (${pagesTxt})`, 'success');
+    }
   } catch (e) {
     showToast(T('تعذّر تجهيز ملف الـ PDF — جرّب تاني، أو استخدم "طباعة" واختار Save as PDF'), 'error');
   } finally {
