@@ -361,6 +361,7 @@ const I18N_DICT = {
   tabPenaltiesAdmin:  { ar: '⚖️ الجزاءات', en: '⚖️ Penalties' },
   tabInspections:     { ar: '🦺 الفحص الشهري', en: '🦺 Monthly Inspection' },
   tabAuditLog:        { ar: '🛡️ سجل التدقيق', en: '🛡️ Audit Log' },
+  tabReports:         { ar: '📑 التقارير', en: '📑 Reports' },
   wlTitle:            { ar: 'مرحباً بك', en: 'Welcome' },
   wlCodeLabel:        { ar: 'الكود الوظيفي', en: 'Employee Code' },
   wlCodePlaceholder:  { ar: 'أدخل كودك الوظيفي', en: 'Enter your employee code' },
@@ -585,11 +586,57 @@ function clearToken() {
  * ولا يمكنها إرسال Authorization header. السيرفر يقرأ هذا التوكن عبر
  * authenticateTokenFlexible لنفس مسارات التنزيل فقط.
  */
-function navigateWithAuth(url) {
+// ── روابط التحميل والطباعة ─────────────────────────────────────
+// (22 سبتمبر 2026) قبل كده كنا بنحط توكن الجلسة الكامل في اللينك (?dt=)
+// فكان بيتسجّل في history المتصفح — على جهاز مشترك في المصنع أي حد يقدر
+// يفتح الجلسة منه. دلوقتي بنطلب من السيرفر "رابط مؤقت": صالح دقيقتين،
+// لملف واحد بس، ومرفوض كتوكن جلسة في أي حتة تانية.
+async function getLinkToken(path) {
+  const res = await authFetch('/api/auth/link-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: String(path || '').split('?')[0] }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.token) throw new Error(data.error || 'link-token failed');
+  return data.token;
+}
+
+function _withLinkToken(url, linkToken) {
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}dt=${encodeURIComponent(linkToken)}`;
+}
+
+async function navigateWithAuth(url) {
   const token = getToken();
   if (!token) { showToast(T('سجّل دخولك أولاً لتنزيل الملف'), 'error'); return; }
-  const sep = url.includes('?') ? '&' : '?';
-  window.location.href = `${url}${sep}dt=${encodeURIComponent(token)}`;
+  try {
+    window.location.href = _withLinkToken(url, await getLinkToken(url));
+  } catch (e) {
+    showToast(T('تعذّر تجهيز الملف — حاول تاني'), 'error');
+  }
+}
+
+/**
+ * بيفتح صفحة طباعة في تاب جديد (التقارير، التصاريح، البلاغات، التجارب).
+ * opts.before: خطوة async بتتنفذ قبل تحميل الصفحة (زي حفظ آخر تعديلات).
+ */
+async function openPrintWithAuth(url, opts = {}) {
+  const token = getToken();
+  if (!token) { showToast(T('سجّل دخولك أولاً'), 'error'); return; }
+  // التاب بيتفتح فورًا (قبل أي انتظار) عشان مانع النوافذ المنبثقة ما يقفلوش
+  const win = window.open('', '_blank');
+  if (win) {
+    try { win.document.write('<p dir="rtl" style="font-family:Tahoma,Arial;text-align:center;margin-top:60px;color:#374151">جاري تجهيز المستند للطباعة…</p>'); } catch (e) { /* ignore */ }
+  }
+  try {
+    if (typeof opts.before === 'function') await opts.before();
+    const full = _withLinkToken(url, await getLinkToken(url));
+    if (win) win.location.href = full; else window.location.href = full;
+  } catch (e) {
+    if (win) { try { win.close(); } catch (e2) { /* ignore */ } }
+    showToast(T('تعذّر فتح صفحة الطباعة — حاول تاني'), 'error');
+  }
 }
 
 /**
@@ -599,7 +646,7 @@ function navigateWithAuth(url) {
  */
 // حساب المتابعة (عرض فقط): أي طلب تعديل بيتقفل من هنا كمان — السيرفر
 // رافضه أصلاً، بس كده المستخدم بياخد رسالة واضحة بدل رسالة رفض جافة.
-const VIEWER_WRITE_OK = /\/api\/(chatbot\/message|auth\/(profile|change-password|refresh)|notifications\/|dashboard\/export-)/;
+const VIEWER_WRITE_OK = /\/api\/(chatbot\/message|auth\/(profile|change-password|refresh|link-token)|notifications\/|dashboard\/export-|reports\/email)/;
 async function authFetch(url, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
   if (document.body.dataset.readonly === '1' && method !== 'GET' && !VIEWER_WRITE_OK.test(url)) {
@@ -700,33 +747,40 @@ function showToast(msg, type = 'error') {
 // ────────────────────────────────────────────────────────────
 // 🔌 Storage API (talks to server.js)
 // ────────────────────────────────────────────────────────────
+// ── الطلبات اللي بتتكرر كل كام ثانية (22 سبتمبر 2026) ─────────────────
+// بنبعت آخر ETag بإيدينا: لو مفيش جديد السيرفر بيرد 304 من غير بيانات، والصفحة
+// ما بتنزّلش ولا بتفك (JSON.parse) الـ 5.7 ميجا بتوع التصاريح كل 4 ثواني —
+// ده كان بيسخّن الموبايلات ويخلّص البطارية. cache:'no-store' عشان المتصفح
+// ما يخزنش نسخة تانية على الهارد.
+const _pollCache = new Map(); // url -> { etag, data }
+async function fetchJsonIfChanged(url) {
+  const cached = _pollCache.get(url);
+  const res = await authFetch(url, {
+    cache: 'no-store',
+    headers: cached && cached.etag ? { 'If-None-Match': cached.etag } : {},
+  });
+  if (res.status === 304 && cached) return { ok: true, changed: false, data: cached.data };
+  if (!res.ok) return { ok: false, changed: false, data: null, status: res.status };
+  const data = await res.json();
+  const etag = res.headers.get('ETag');
+  if (etag) _pollCache.set(url, { etag, data }); else _pollCache.delete(url);
+  return { ok: true, changed: true, data };
+}
+
 async function apiGet(key){
   try{
     const cleanKey = key.startsWith('/') ? key.substring(1) : key;
-    const res = await authFetch(`/api/storage/${cleanKey}`);
-    if(!res.ok) return null;
-    return await res.json();
+    const r = await fetchJsonIfChanged(`/api/storage/${cleanKey}`);
+    return r.ok ? r.data : null;
   }catch(e){
     if (!navigator.onLine) showToast(T('لا يوجد اتصال بالإنترنت — تحقق من اتصالك وحاول مجدداً'), 'error');
     console.error('apiGet error', e);
     return null;
   }
 }
-async function apiSet(key, value){
-  try{
-    const cleanKey = key.startsWith('/') ? key.substring(1) : key;
-    const res = await fetch(`/api/storage/${cleanKey}`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ value })
-    });
-    return res.ok;
-  }catch(e){
-    if (!navigator.onLine) showToast(T('لا يوجد اتصال — تحقق من الشبكة'), 'error');
-    console.error('apiSet error', e);
-    return false;
-  }
-}
+// (22 سبتمبر 2026) اتشالت apiSet/savePermits: كانوا بيكتبوا قايمة التصاريح
+// كلها مرة واحدة من غير جلسة — والسيرفر قافل ده من زمان (التصاريح بتتقدم
+// واحد واحد من POST /api/permits)، ومكانش فيه أي مكان بيستخدمهم.
 
 // ---------- permit type definitions (from the real forms) ----------
 const PERMIT_TYPES = {
@@ -1036,7 +1090,7 @@ function applyRbacUI() {
     ['viewDashboard','viewInspections','viewAuditLog','viewWorker','viewHazardWorker',
      'viewMyHistory','viewMyHazards','viewSup','viewSupHazard','viewUsers','viewEmployees',
      'viewTrainingWorker','viewTrainingAdmin','viewDrillWorker','viewDrillAdmin',
-     'viewPenaltiesWorker','viewPenaltiesAdmin'].forEach(id => setDisplay(id, false));
+     'viewPenaltiesWorker','viewPenaltiesAdmin','viewReports'].forEach(id => setDisplay(id, false));
     const empArea = document.getElementById('empBadgeArea');
     if (empArea) empArea.style.display = 'none';
   }
@@ -1082,6 +1136,8 @@ function applyRbacUI() {
   setDisplay('tabInspections', isSup && (uiRole === 'super_admin' || uiRole === 'hse_admin'));
   // 🛡️ Audit Log Tab — hse_admin/super_admin only
   setDisplay('tabAuditLog', isSup && (uiRole === 'super_admin' || uiRole === 'hse_admin'));
+  // 📑 التقارير — مسئول السلامة والسوبر أدمن (وحسابات المتابعة: uiRole بتاعهم super_admin)
+  setDisplay('tabReports', isSup && (uiRole === 'super_admin' || uiRole === 'hse_admin'));
   // 👔 المؤشرات التنفيذية — تبويب لحسابات المتابعة (المدير التنفيذي ومدير السلامة)
   setDisplay('tabExecutive', isSup && isViewer);
 
@@ -1182,9 +1238,6 @@ async function loadPermits(){
   const res = await apiGet('work-permits');
   return res && res.value ? JSON.parse(res.value) : [];
 }
-async function savePermits(list){
-  return await apiSet('work-permits', JSON.stringify(list));
-}
 function genId(list){
   const year = new Date().getFullYear();
   // [FIX-4] الاعتماد على أعلى رقم موجود + 1 بدلاً من list.length لتجنب التكرار عند الحذف
@@ -1205,7 +1258,7 @@ function switchTab(which){
   // worker tabs.  Pre-auth state ('none') is allowed to reach the
   // supervisor login gate so goToAdminLogin() keeps working.
   const workerTabs = ['worker', 'hazardWorker', 'myhistory', 'myhazards', 'trainingWorker', 'drillWorker', 'penaltiesWorker'];
-  const supTabs    = ['sup', 'supHazard', 'users', 'employees', 'trainingAdmin', 'drillAdmin', 'penaltiesAdmin', 'inspections', 'auditlog'];
+  const supTabs    = ['sup', 'supHazard', 'users', 'employees', 'trainingAdmin', 'drillAdmin', 'penaltiesAdmin', 'inspections', 'auditlog', 'reports'];
   if (workerTabs.includes(which) && sessionRole === 'supervisor') return;
   if (supTabs.includes(which)   && sessionRole === 'worker') return;
   // ─────────────────────────────────────────────────────────────────
@@ -1242,6 +1295,8 @@ function switchTab(which){
   if(tabInsp) tabInsp.classList.toggle('active', which==='inspections');
   const tabAudit = document.getElementById('tabAuditLog');
   if(tabAudit) tabAudit.classList.toggle('active', which==='auditlog');
+  const tabRep = document.getElementById('tabReports');
+  if(tabRep) tabRep.classList.toggle('active', which==='reports');
   const tabExec = document.getElementById('tabExecutive');
   if(tabExec) tabExec.classList.toggle('active', which==='executive');
 
@@ -1280,6 +1335,9 @@ function switchTab(which){
   // Audit Log view (سجل التدقيق)
   const viewAudit = document.getElementById('viewAuditLog');
   if(viewAudit) viewAudit.style.display = which==='auditlog' ? 'block':'none';
+  // التقارير (22 سبتمبر 2026)
+  const viewRep = document.getElementById('viewReports');
+  if(viewRep) viewRep.style.display = which==='reports' ? 'block':'none';
   // Executive view (المؤشرات التنفيذية) — تبويب لحسابات المتابعة
   const viewExec = document.getElementById('viewExecutive');
   if(viewExec) viewExec.style.display = which==='executive' ? 'block':'none';
@@ -1414,6 +1472,12 @@ function switchTab(which){
   if(which==='auditlog'){
     if(isLoggedIn && (currentUserRole === 'hse_admin' || currentUserRole === 'super_admin' || VIEWER_ROLES_UI.includes(currentUserRole))){
       renderAuditLog();
+    } else { switchTab('sup'); }
+  }
+  // 📑 التقارير — مسئول السلامة والسوبر أدمن + حسابات المتابعة
+  if(which==='reports'){
+    if(isLoggedIn && (currentUserRole === 'hse_admin' || currentUserRole === 'super_admin' || VIEWER_ROLES_UI.includes(currentUserRole))){
+      renderReportsTab();
     } else { switchTab('sup'); }
   }
   // المؤشرات التنفيذية — للمدير التنفيذي ومدير السلامة (عرض فقط)
@@ -3288,6 +3352,8 @@ function typeFilterMatch(p){
   return p.typeLabel === currentTypeFilter;
 }
 
+// عدد كروت التصاريح اللي بتترسم في المرة (والباقي بزرار "عرض المزيد")
+const PM_PAGE_SIZE = 50;
 function renderList(){
   const currentRoleKey = getRoleKey(currentUserRole);
 
@@ -3368,7 +3434,27 @@ function renderList(){
     return;
   }
 
-  container.innerHTML = list.map(p => {
+  // (22 سبتمبر 2026) قبل كده كل التصاريح المطابقة (ممكن آلاف) كانت بتترسم
+  // مرة واحدة بكل تفاصيلها — الصفحة كانت بتهنّج خصوصًا على الموبايل. دلوقتي
+  // أول 50 وزرار "عرض المزيد". العدد بيرجع 50 لما الفلاتر تتغير بس (مش مع
+  // التحديث التلقائي كل كام ثانية).
+  const filterSig = [currentFilter, currentTypeFilter, currentPmDeptFilter, currentPmYearFilter,
+    ...['filter_pm_worker', 'filter_pm_sup', 'filter_pm_dateFrom', 'filter_pm_dateTo'].map(id => (document.getElementById(id) || {}).value || '')].join('|');
+  if (filterSig !== window._pmListSig) { window._pmListSig = filterSig; window._pmShowCount = PM_PAGE_SIZE; }
+  let showCount = window._pmShowCount || PM_PAGE_SIZE;
+  if (window._pmEnsureVisibleId) {
+    // فتح تصريح معيّن من إشعار: لازم الكارت بتاعه يبقى مرسوم
+    const idx = list.findIndex(p => p.id === window._pmEnsureVisibleId);
+    if (idx >= showCount) showCount = window._pmShowCount = idx + 1;
+    window._pmEnsureVisibleId = null;
+  }
+  const visibleList = list.slice(0, showCount);
+  const moreCount = list.length - visibleList.length;
+  const moreHtml = moreCount > 0
+    ? `<div class="pm-more"><button type="button" class="btn btn-secondary" onclick="pmShowMore()">${T('عرض المزيد')} (${moreCount} ${T('متبقي')})</button></div>`
+    : '';
+
+  container.innerHTML = visibleList.map(p => {
     const failedChecks = (p.checklist||[]).filter(c=>c.answer==='لا').length;
     // بناء قائمة التحقق مع قدوات الأقسام
     const checklistBySection = {};
@@ -3411,7 +3497,7 @@ function renderList(){
       <div class="sup-top">
         <div>
           <div class="worker"><span class="type-pill">${escapeHtml(T(p.typeLabel))}</span>${escapeHtml(p.workerName)}</div>
-          <div class="tnum">${p.id} · ${p.date||''} ${T("· وردية")} ${escapeHtml(p.shift||'')}</div>
+          <div class="tnum">${escapeHtml(p.id)} · ${escapeHtml(p.date||'')} ${T("· وردية")} ${escapeHtml(p.shift||'')}</div>
         </div>
         ${statusBadge}
       </div>
@@ -3437,7 +3523,7 @@ function renderList(){
       ${failedChecks>0 ? `<div class="checklist-summary"><b>⚠ ${failedChecks} ${T("بند غير مستوفٍ في قائمة التحقق")}</b></div>` : `<div class="checklist-summary">${T("✓ كل بنود قائمة التحقق مستوفاة أو لا تنطبق")}</div>`}
 
       <span class="details-toggle" onclick="toggleDetails('${p.id}')">${T("عرض كل التفاصيل (قائمة التحقق + المخاطر) ⌄")}</span>
-      <button class="btn btn-secondary btn-sm" type="button" style="margin-inline-start:10px;" onclick="navigateWithAuth('/api/permits/${p.id}/pdf')">${T("🖨️ طباعة PDF")}</button>
+      <button class="btn btn-secondary btn-sm" type="button" style="margin-inline-start:10px;" onclick="openPrintWithAuth('/print/permit/${encodeURIComponent(p.id)}')">${T("🖨️ طباعة")}</button>
       <div class="full-details" id="details-${p.id}">
         <div class="section-title" style="margin-top:14px;">${T("قائمة التحقق")}</div>
         ${checklistHtml}
@@ -3527,7 +3613,12 @@ function renderList(){
         </div>
       ` : ''}
     </div>
-  `;}).join('');
+  `;}).join('') + moreHtml;
+}
+
+function pmShowMore() {
+  window._pmShowCount = (window._pmShowCount || PM_PAGE_SIZE) + PM_PAGE_SIZE;
+  renderList();
 }
 
 function toggleDetails(id){
@@ -5357,7 +5448,7 @@ async function renderMyHazards(isSilent = false) {
             <div class="tnum">${h.id}</div>
           </div>
           <div class="meta-grid">
-            <div><span>${T("التاريخ")}</span>${h.date}</div>
+            <div><span>${T("التاريخ")}</span>${escapeHtml(h.date)}</div>
             <div><span>${T("القسم")}</span>${escapeHtml(h.department)}</div>
             <div><span>${T("المنطقة")}</span>${escapeHtml(h.area)}</div>
           </div>
@@ -5366,7 +5457,7 @@ async function renderMyHazards(isSilent = false) {
             <div class="hz-risk-badge ${riskClass}" style="margin:0; padding:4px 8px; font-size:11.5px;">${riskStr}</div>
           </div>
           <div class="desc"><strong>${T("وصف الخطورة:")}</strong><br>${escapeHtml(h.description)}</div>
-          ${h.photoUrl ? `<div style="margin-top:8px;"><div class="hz-photo-badge" onclick="openLightbox('${h.photoUrl}')">${T("🖼️ عرض الصورة")}</div></div>` : ''}
+          ${h.photoUrl ? `<div style="margin-top:8px;"><div class="hz-photo-badge" onclick="openLightbox('${escapeAttr(h.photoUrl)}')">${T("🖼️ عرض الصورة")}</div></div>` : ''}
           <div class="phc-msg" style="margin-top:10px; font-size:12px; color:var(--muted);">${pendingDesc}</div>
           ${h.actionTaken ? `<div class="note-box show" style="margin-top:10px; background-color: #f8f9fa; border-left: 4px solid var(--primary); padding: 10px; border-radius: 4px;">
             <strong>${T("🛠️ الإجراء المتخذ من المشرف (")}${escapeHtml(h.updatedBy || T('إدارة السلامة'))}):</strong><br>
@@ -5767,7 +5858,7 @@ function getHazardCardHtml(h) {
         <span class="step-icon">👁️</span>
         <div class="step-info">
           <strong>${T("وقت المشاهدة من المشرف:")}</strong>
-          <span>${h.seenAt ? `${formatDateTime(h.seenAt)} (${h.seenBy || T('المشرف')})` : T('لم تتم المشاهدة بعد')}</span>
+          <span>${h.seenAt ? `${formatDateTime(h.seenAt)} (${escapeHtml(h.seenBy || T('المشرف'))})` : T('لم تتم المشاهدة بعد')}</span>
         </div>
       </div>
 
@@ -5775,7 +5866,7 @@ function getHazardCardHtml(h) {
         <span class="step-icon">⚙️</span>
         <div class="step-info">
           <strong>${T("وقت بدء المعالجة:")}</strong>
-          <span>${startDisplay} ${rawStart && h.assignedTechName ? `${T("(المنسوب:")} ${h.assignedTechName}${h.assignedTechCode ? ' - '+h.assignedTechCode : ''})` : (rawStart && h.startedByName ? `(${h.startedByName})` : (rawStart ? T('(الصيانة)') : ''))}</span>
+          <span>${startDisplay} ${rawStart && h.assignedTechName ? `${T("(المنسوب:")} ${escapeHtml(h.assignedTechName)}${h.assignedTechCode ? ' - '+escapeHtml(h.assignedTechCode) : ''})` : (rawStart && h.startedByName ? `(${escapeHtml(h.startedByName)})` : (rawStart ? T('(الصيانة)') : ''))}</span>
         </div>
       </div>
 
@@ -5783,7 +5874,7 @@ function getHazardCardHtml(h) {
         <span class="step-icon">✅</span>
         <div class="step-info">
           <strong>${T("وقت الانتهاء والإغلاق:")}</strong>
-          <span>${h.resolvedAt ? `${formatDateTime(h.resolvedAt)} (${h.resolvedBy || T('المشرف')})` : T('لم ينتهِ بعد')}</span>
+          <span>${h.resolvedAt ? `${formatDateTime(h.resolvedAt)} (${escapeHtml(h.resolvedBy || T('المشرف'))})` : T('لم ينتهِ بعد')}</span>
         </div>
       </div>
     </div>
@@ -5799,7 +5890,7 @@ function getHazardCardHtml(h) {
         <div class="tnum">${h.id}</div>
       </div>
       <div class="meta-grid">
-        <div><span>${T("التاريخ")}</span>${h.date}</div>
+        <div><span>${T("التاريخ")}</span>${escapeHtml(h.date)}</div>
         <div><span>${T("القسم")}</span>${escapeHtml(h.department)}</div>
         <div><span>${T("المنطقة")}</span>${escapeHtml(h.area)}</div>
         ${(h.hseName || h.hseReviewer) ? `<div><span>${T("مشرف السلامة")}</span>${escapeHtml(h.hseName || h.hseReviewer)}</div>` : ''}
@@ -5813,8 +5904,8 @@ function getHazardCardHtml(h) {
       ${h.proposedSolution ? `<div class="desc"><strong>${T("الحل المقترح:")}</strong><br>${escapeHtml(h.proposedSolution)}</div>` : ''}
       ${h.actionTaken ? `<div class="desc" style="background:#f8f9fa; border-right:4px solid var(--primary); padding:10px; margin-top:10px;"><strong>${T("الإجراء المتخذ:")}</strong><br>${escapeHtml(h.actionTaken)}</div>` : ''}
       ${h.assignNotes ? `<div class="desc" style="background:#e0f7fa; padding:8px; border-radius:4px; border:1px solid #b2ebf2; margin-top:8px;"><strong>${T("ملاحظات التوجيه للصيانة:")}</strong><br>${escapeHtml(h.assignNotes)}</div>` : ''}
-      ${h.photoUrl ? `<div style="margin-top:8px;"><div class="hz-photo-badge" onclick="openLightbox('${h.photoUrl}')">${T("🖼️ عرض الصورة")}</div></div>` : ''}
-      <button class="btn btn-secondary btn-sm" type="button" style="margin-top:10px;" onclick="navigateWithAuth('/api/hazards/${h.id}/pdf')">${T("🖨️ طباعة PDF")}</button>
+      ${h.photoUrl ? `<div style="margin-top:8px;"><div class="hz-photo-badge" onclick="openLightbox('${escapeAttr(h.photoUrl)}')">${T("🖼️ عرض الصورة")}</div></div>` : ''}
+      <button class="btn btn-secondary btn-sm" type="button" style="margin-top:10px;" onclick="openPrintWithAuth('/print/hazard/${encodeURIComponent(h.id)}')">${T("🖨️ طباعة")}</button>
       ${actionHtml}
       ${timelineHtml}
       ${manageHtml}
@@ -5826,6 +5917,13 @@ function getHazardCardHtml(h) {
 // typing in the search boxes (reporter/hse/dept) only re-filters this
 // in-memory array instead of hitting the network on every keystroke.
 window._hazardsRawCache = null;
+
+// عدد كروت البلاغات اللي بتترسم في المرة (والباقي بزرار "عرض المزيد")
+const HZ_PAGE_SIZE = 50;
+function hzShowMore() {
+  window._hzShowCount = (window._hzShowCount || HZ_PAGE_SIZE) + HZ_PAGE_SIZE;
+  renderSupHazard(true, false, true);
+}
 
 async function renderSupHazard(isSilent = false, forceRefetch = true, skipFilterBar = false) {
   if (!isSilent) document.getElementById('hzList').innerHTML = T('<div class="loading">جارِ التحميل…</div>');
@@ -5953,10 +6051,19 @@ async function renderSupHazard(isSilent = false, forceRefetch = true, skipFilter
       listEl.innerHTML = T('<div class="empty"><div class="icon">⚠️</div>لا توجد بلاغات حالياً</div>');
       return;
     }
+    // (22 سبتمبر 2026) زي قايمة التصاريح: أول 50 بلاغ + "عرض المزيد" بدل
+    // ما مئات/آلاف الكروت تترسم مرة واحدة. العدد بيرجع 50 مع تغيير الفلاتر بس.
+    const hzSig = [currentHzStatusFilter, currentHzSeverityFilter, currentHzDeptFilter, currentHzYearFilter,
+      fTime, fReporter || '', fHse || '', fFrom || '', fTo || ''].join('|');
+    if (hzSig !== window._hzListSig) { window._hzListSig = hzSig; window._hzShowCount = HZ_PAGE_SIZE; }
+    const hzShow = window._hzShowCount || HZ_PAGE_SIZE;
     let html = '';
-    hazards.forEach(h => {
+    hazards.slice(0, hzShow).forEach(h => {
       html += getHazardCardHtml(h);
     });
+    if (hazards.length > hzShow) {
+      html += `<div class="pm-more"><button type="button" class="btn btn-secondary" onclick="hzShowMore()">${T('عرض المزيد')} (${hazards.length - hzShow} ${T('متبقي')})</button></div>`;
+    }
     listEl.innerHTML = html;
 
   } catch(e) {
@@ -6597,12 +6704,18 @@ function startHazardPolling() {
 
     if (sessionRole === 'supervisor' && currentAdminToken) {
       try {
-        const res = await authFetch('/api/hazards');
-        if (res.ok) {
-          const data = await res.json();
-          const list = data.hazards || [];
-          _applyHazardBadgeCount(list);
-          if (!isEditing) _applySupHazardDiff(list);
+        // 304 (مفيش جديد) = مفيش فك ولا مقارنة ولا رسم
+        const r = await fetchJsonIfChanged('/api/hazards');
+        if (r.ok) {
+          const list = (r.data && r.data.hazards) || [];
+          if (r.changed) _applyHazardBadgeCount(list);
+          // تحديث وصل والمستخدم كان بيكتب → يتطبق أول ما يخلص
+          if (!isEditing && (r.changed || window._hzDiffPending)) {
+            window._hzDiffPending = false;
+            _applySupHazardDiff(list);
+          } else if (r.changed) {
+            window._hzDiffPending = true;
+          }
         }
       } catch (e) {}
     } else if (!isEditing) {
@@ -6748,7 +6861,7 @@ async function loadWorkerTraining(isSilent = false) {
                 if (h.hasRecording) {
                   recordingBtn = h.reviewExpired
                     ? `<span class="wl-expired-tag" title="${T('انتهت مدة المراجعة')}">⏳ ${T('انتهت المدة')}</span>`
-                    : `<button class="um-btn" style="padding:4px 10px; font-size:11px;" onclick="openWorkerRecordingModal('${h.recordingUrl}')">${T('🎥 مشاهدة')}</button>`;
+                    : `<button class="um-btn" style="padding:4px 10px; font-size:11px;" onclick="openWorkerRecordingModal('${escapeAttr(h.recordingUrl)}')">${T('🎥 مشاهدة')}</button>`;
                 }
                 // زرار "الاختبار" لأي محاضرة عليها اختبار (إضافة 15 سبتمبر 2026)
                 let quizBtn = `<span class="wl-dash">—</span>`;
@@ -7144,7 +7257,7 @@ function renderAdminLiveSessions(trainings) {
                   <td>${escapeHtml(a.department)}</td>
                   <td style="font-size:12px; color:var(--muted);">${new Date(a.attendedAt).toLocaleTimeString(LOC())}</td>
                   <td>
-                    <button class="um-btn ${a.verified ? 'del' : 'pass'}" onclick="toggleTrnVerification('${trn.id}', '${a.empCode}', ${!a.verified})" style="padding:4px 8px; font-size:11px;">
+                    <button class="um-btn ${a.verified ? 'del' : 'pass'}" onclick="toggleTrnVerification('${escapeAttr(trn.id)}', '${escapeAttr(a.empCode)}', ${!a.verified})" style="padding:4px 8px; font-size:11px;">
                       ${a.verified ? T('❌ إلغاء') : T('✅ تأكيد')}
                     </button>
                   </td>
@@ -8362,7 +8475,7 @@ async function openDrillReportModal(drillId) {
   overlay.id = 'drlReportModalOverlay';
   overlay.style.cssText = 'position:fixed; inset:0; background:rgba(15,23,42,0.6); z-index:9999; display:flex; align-items:flex-start; justify-content:center; overflow:auto; padding:20px 10px;';
   overlay.innerHTML = `
-    <div style="background:#fff; width:100%; max-width:720px; border-radius:12px; overflow:hidden; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+    <div style="background:var(--surface); color:var(--ink); width:100%; max-width:720px; border-radius:12px; overflow:hidden; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
       <div style="background:var(--amber); color:#fff; padding:16px 20px; display:flex; justify-content:space-between; align-items:center;">
         <div style="font-weight:700; font-size:1.1rem;">${T("📝 ريبورت التجربة:")} ${escapeHtml(drl.title || '')}</div>
         <button onclick="document.getElementById('drlReportModalOverlay').remove()" style="background:transparent; border:none; color:#fff; font-size:1.4rem; cursor:pointer;">×</button>
@@ -8420,10 +8533,11 @@ async function openDrillReportModal(drillId) {
         </div>
         <div id="drf_msg" style="margin-top:10px; font-size:13px;"></div>
       </div>
-      <div style="padding:14px 20px; background:#f8f9fa; border-top:1px solid #eee; display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+      <div style="padding:14px 20px; background:var(--body-bg); border-top:1px solid var(--paper-line); display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
         <button onclick="document.getElementById('drlReportModalOverlay').remove()" style="background:#e2e8f0; color:#0f172a; border:none; padding:10px 18px; border-radius:8px; cursor:pointer; font-weight:700;">${T("إغلاق")}</button>
-        <button onclick="saveDrillReport('${drillId}')" style="background:#0F172A; color:#fff; border:none; padding:10px 18px; border-radius:8px; cursor:pointer; font-weight:700;">${T("💾 حفظ الريبورت")}</button>
-        <button onclick="downloadDrillReport('${drillId}')" style="background:#16A34A; color:#fff; border:none; padding:10px 18px; border-radius:8px; cursor:pointer; font-weight:700;">${T("⬇️ تحميل Word (بنفس التصميم)")}</button>
+        <button onclick="saveDrillReport('${escapeAttr(drillId)}')" style="background:#0F172A; color:#fff; border:none; padding:10px 18px; border-radius:8px; cursor:pointer; font-weight:700;">${T("💾 حفظ الريبورت")}</button>
+        <button onclick="printDrillReport('${escapeAttr(drillId)}')" style="background:var(--brand-primary); color:#fff; border:none; padding:10px 18px; border-radius:8px; cursor:pointer; font-weight:700;">${T("🖨️ طباعة")}</button>
+        <button onclick="downloadDrillReport('${escapeAttr(drillId)}')" style="background:#16A34A; color:#fff; border:none; padding:10px 18px; border-radius:8px; cursor:pointer; font-weight:700;">${T("⬇️ تحميل Word (بنفس التصميم)")}</button>
       </div>
     </div>
   `;
@@ -8472,7 +8586,15 @@ async function saveDrillReport(drillId) {
 async function downloadDrillReport(drillId) {
   // نحفظ أولاً بأحدث بيانات ثم ننزل الملف بنفس تصميم النموذج الورقي
   await saveDrillReport(drillId);
-  navigateWithAuth(`/api/drills/${drillId}/report/export`);
+  navigateWithAuth(`/api/drills/${encodeURIComponent(drillId)}/report/export`);
+}
+
+/** طباعة الريبورت بشكل المستندات الموحّد (بعد حفظ آخر تعديلات) */
+function printDrillReport(drillId) {
+  const readOnly = document.body.dataset.readonly === '1';
+  openPrintWithAuth(`/print/drill/${encodeURIComponent(drillId)}?autoprint=1`, {
+    before: readOnly ? null : () => saveDrillReport(drillId),
+  });
 }
 
 
@@ -8732,7 +8854,7 @@ function renderNotifications() {
     if (n.type === 'training') iconEmoji = '🎓';
 
     return `
-      <li class="notif-item ${isUnread ? 'unread' : ''}" onclick="handleNotificationClick('${n.id}', '${n.link}', '${n.targetId || ''}', '${n.type || ''}')">
+      <li class="notif-item ${isUnread ? 'unread' : ''}" onclick="handleNotificationClick('${escapeAttr(n.id)}', '${escapeAttr(n.link)}', '${escapeAttr(n.targetId || '')}', '${escapeAttr(n.type || '')}')">
         <div class="notif-icon-wrap">${iconEmoji}</div>
         <div class="notif-content">
           <div class="notif-title-row">
@@ -8770,6 +8892,8 @@ function navigateToNotificationTarget(link, targetId, type) {
     'tabTrainingAdmin': 'trainingAdmin'
   };
   const mappedLink = tabMap[link] || link;
+  // قايمة التصاريح بتعرض أول 50 بس — نضمن إن التصريح المطلوب يترسم
+  if (targetId && type === 'permit') window._pmEnsureVisibleId = targetId;
   switchTab(mappedLink);
   if (targetId) {
     setTimeout(() => {
@@ -11558,10 +11682,308 @@ async function inspDeleteRecord(recordId) {
 // ============================================================
 // 🛡️ AUDIT LOG (سجل التدقيق) — hse_admin/super_admin only, read-only
 // ============================================================
+// ============================================================
+// 📑 التقارير — تقرير السلامة الشامل (22 سبتمبر 2026)
+// ============================================================
+// تقرير نصي كامل (من غير رسومات) بيتبني على السيرفر من نفس أرقام
+// الداشبورد: الأهداف، البلاغات، التصاريح، التدريب، الطوارئ، الجزاءات
+// والفحص الشهري. بيتعرض هنا كمعاينة، وبيتطبع بشعار الشركة، وبيتبعت
+// بالإيميل بنفس الفلاتر. الفلاتر بتفضل محفوظة لو خرجت من التابة ورجعت.
+const REPORT_PERIODS = [
+  ['ytd', 'من أول السنة لحد النهارده'],
+  ['month', 'الشهر الحالي'],
+  ['last_month', 'الشهر اللي فات'],
+  ['quarter', 'الربع الحالي'],
+  ['last_year', 'السنة اللي فاتت كاملة'],
+  ['custom', 'فترة مخصصة (من — إلى)'],
+];
+const REPORT_MAIL_KEY = 'hse.reportMailTo';
+const reportsState = { dept: '', emp: '', period: 'ytd', from: '', to: '', loadSeq: 0 };
+
+async function renderReportsTab() {
+  const root = document.getElementById('reportsContent');
+  if (!root) return;
+  const st = reportsState;
+  let savedMail = '';
+  try { savedMail = localStorage.getItem(REPORT_MAIL_KEY) || ''; } catch (e) { /* متصفح من غير تخزين */ }
+
+  root.innerHTML = `
+    <div class="sup-header-row" style="margin-bottom:8px">
+      <h3>${T('📑 تقرير السلامة الشامل')}</h3>
+    </div>
+    <p class="rep-intro">${T('تقرير نصي كامل بكل أرقام السلامة والتارجتات (من غير رسومات) — جاهز للطباعة على ورق بشعار الشركة أو للإرسال بالإيميل. اختار النطاق والفترة واضغط "عرض التقرير".')}</p>
+
+    <div class="adv-filter-box rep-filters">
+      <div class="adv-filter-grid">
+        <div class="adv-filter-field">
+          <label for="repDept">${T('القسم')}</label>
+          <select id="repDept"><option value="">${T('المصنع كله')}</option></select>
+        </div>
+        <div class="adv-filter-field">
+          <label for="repEmp">${T('كود موظف (اختياري)')}</label>
+          <input type="text" id="repEmp" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="${T('مثال: 5943')}" value="${escapeHtml(st.emp)}" />
+        </div>
+        <div class="adv-filter-field">
+          <label for="repPeriod">${T('الفترة')}</label>
+          <select id="repPeriod">
+            ${REPORT_PERIODS.map(([k, v]) => `<option value="${k}" ${st.period === k ? 'selected' : ''}>${T(v)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="adv-filter-field" id="repFromWrap" ${st.period === 'custom' ? '' : 'hidden'}>
+          <label for="repFrom">${T('من تاريخ')}</label>
+          <input type="date" id="repFrom" value="${escapeHtml(st.from)}" />
+        </div>
+        <div class="adv-filter-field" id="repToWrap" ${st.period === 'custom' ? '' : 'hidden'}>
+          <label for="repTo">${T('إلى تاريخ')}</label>
+          <input type="date" id="repTo" value="${escapeHtml(st.to)}" />
+        </div>
+      </div>
+      <div class="rep-hint" id="repEmpHint" ${st.emp ? '' : 'hidden'}>${T('لما تكتب كود موظف، التقرير بيبقى عن الموظف ده بس (فلتر القسم مش بيتحسب).')}</div>
+      <div class="adv-filter-footer">
+        <button class="btn btn-primary" type="button" id="repShowBtn">${T('عرض التقرير')}</button>
+        <button class="btn btn-secondary" type="button" id="repPrintBtn">${T('🖨️ طباعة')}</button>
+        <button class="btn btn-secondary" type="button" id="repPdfBtn">${T('📄 حفظ PDF')}</button>
+        <button class="adv-filter-clear-btn" type="button" id="repResetBtn">${T('مسح الفلاتر')}</button>
+        <span class="adv-filter-count" id="repScopeNote"></span>
+      </div>
+    </div>
+
+    <div class="ticket rep-mail">
+      <div class="ticket-head"><div><div class="ttype">${T('✉️ إرسال التقرير بالإيميل')}</div></div></div>
+      <div class="ticket-body">
+        <div class="rep-mail-row">
+          <input type="text" id="repMailTo" dir="ltr" inputmode="email" autocomplete="email" maxlength="600"
+                 placeholder="name@company.com" value="${escapeHtml(savedMail)}" aria-label="${T('إيميل المستلم')}" />
+          <button class="btn btn-primary rep-send-btn" type="button" id="repSendBtn">✉️ SEND MAIL</button>
+        </div>
+        <div class="rep-hint" id="repMailHint">${T('تقدر تكتب لحد 5 إيميلات بينهم فاصلة. التقرير بيتبعت بنفس الفلاتر اللي فوق، ومعاه نسخة للطباعة كمرفق.')}</div>
+      </div>
+    </div>
+
+    <div class="rep-preview" id="repPreview" aria-live="polite"></div>
+  `;
+
+  const $ = id => document.getElementById(id);
+  const deptSel = $('repDept');
+  const empIn = $('repEmp');
+  const periodSel = $('repPeriod');
+
+  const syncEmpState = () => {
+    const hasEmp = !!empIn.value.trim();
+    deptSel.disabled = hasEmp;
+    $('repEmpHint').hidden = !hasEmp;
+  };
+  periodSel.addEventListener('change', () => {
+    const custom = periodSel.value === 'custom';
+    $('repFromWrap').hidden = !custom;
+    $('repToWrap').hidden = !custom;
+  });
+  empIn.addEventListener('input', syncEmpState);
+  empIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); reportsLoadPreview(); } });
+  $('repShowBtn').addEventListener('click', () => reportsLoadPreview());
+  $('repPrintBtn').addEventListener('click', reportsPrint);
+  $('repPdfBtn').addEventListener('click', reportsSavePdf);
+  $('repSendBtn').addEventListener('click', reportsSendMail);
+  $('repMailTo').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); reportsSendMail(); } });
+  $('repResetBtn').addEventListener('click', () => {
+    Object.assign(reportsState, { dept: '', emp: '', period: 'ytd', from: '', to: '' });
+    renderReportsTab();
+  });
+  syncEmpState();
+
+  // الأقسام + حالة إعدادات الإيميل
+  try {
+    const res = await authFetch('/api/reports/options');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'options');
+    if (!document.body.contains(deptSel)) return; // المستخدم خرج من التابة
+    deptSel.insertAdjacentHTML('beforeend', (data.departments || []).map(d =>
+      `<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)} (${Number(d.count) || 0})</option>`).join(''));
+    deptSel.value = st.dept;
+    if (deptSel.value !== st.dept) { st.dept = ''; deptSel.value = ''; }
+    if (!data.mailConfigured) {
+      const hint = $('repMailHint');
+      hint.classList.add('warn');
+      hint.textContent = currentUserRole === 'super_admin'
+        ? T('⚠️ إيميل الإرسال (SMTP) مش متظبط لسه — اظبطه من تابة "سجل التدقيق" ← "بيانات إيميل الإرسال (SMTP)"، وبعدها زرار الإرسال هيشتغل.')
+        : T('⚠️ إيميل الإرسال (SMTP) مش متظبط لسه على السيرفر — اطلب من السوبر أدمن يظبطه، وبعدها زرار الإرسال هيشتغل.');
+    }
+  } catch (e) {
+    showToast(T('تعذّر تحميل قايمة الأقسام — تقدر تطلع تقرير المصنع كله أو بكود موظف'), 'error');
+  }
+
+  reportsLoadPreview();
+}
+
+/** بيقرا الفلاتر من الشاشة ويتأكد إنها سليمة — بيرجع null لو فيه غلط */
+function reportsReadFilters() {
+  const get = id => document.getElementById(id);
+  const st = reportsState;
+  if (!get('repPeriod')) return null;
+  st.emp = get('repEmp').value.trim();
+  st.dept = st.emp ? '' : get('repDept').value;
+  st.period = get('repPeriod').value;
+  st.from = get('repFrom').value;
+  st.to = get('repTo').value;
+  if (st.emp && !/^[A-Za-z0-9٠-٩۰-۹_-]{1,20}$/.test(st.emp)) {
+    showToast(T('الكود الوظيفي لازم يكون أرقام/حروف بس'), 'error');
+    return null;
+  }
+  if (st.period === 'custom') {
+    if (!st.from || !st.to) { showToast(T('اختار تاريخ البداية وتاريخ النهاية'), 'error'); return null; }
+    if (st.from > st.to) { showToast(T('تاريخ البداية لازم يكون قبل تاريخ النهاية'), 'error'); return null; }
+  }
+  const q = {};
+  if (st.emp) q.emp = st.emp; else if (st.dept) q.dept = st.dept;
+  q.period = st.period;
+  if (st.period === 'custom') { q.from = st.from; q.to = st.to; }
+  return q;
+}
+
+function reportsScopeLabel(q) {
+  const who = q.emp ? `${T('الموظف كود')} ${q.emp}` : (q.dept || T('المصنع كله'));
+  const per = REPORT_PERIODS.find(p => p[0] === q.period);
+  const when = q.period === 'custom' ? `${q.from} → ${q.to}` : T(per ? per[1] : '');
+  return `${who} — ${when}`;
+}
+
+/**
+ * المعاينة: التقرير بيتجاب بالتوكن في الهيدر وبيتعرض في iframe معزول.
+ * بترجع الـ iframe بعد ما يحمّل (أو null لو حصل خطأ) — "حفظ PDF" بيستخدمها.
+ */
+async function reportsLoadPreview() {
+  const q = reportsReadFilters();
+  const box = document.getElementById('repPreview');
+  if (!q || !box) return null;
+  const seq = ++reportsState.loadSeq;
+  reportsState.previewKey = null;
+  const note = document.getElementById('repScopeNote');
+  if (note) note.textContent = reportsScopeLabel(q);
+  box.innerHTML = `<div class="loading">${T('جارِ تجهيز التقرير…')}</div>`;
+  try {
+    const params = new URLSearchParams({ ...q, embed: '1' });
+    const res = await authFetch(`/print/report?${params.toString()}`);
+    const html = await res.text();
+    if (seq !== reportsState.loadSeq || !document.body.contains(box)) return null; // طلب أحدث سبقه
+    if (!res.ok) {
+      // السيرفر بيرجّع صفحة فيها سبب الخطأ (قسم/كود مش موجود...) — نطلع النص منها
+      const msg = (new DOMParser().parseFromString(html, 'text/html').querySelector('p.text, .sheet, body') || {}).textContent;
+      box.innerHTML = `<div class="empty" style="color:var(--danger)"><div class="icon">⚠️</div>${escapeHtml((msg || '').trim().slice(0, 300) || T('تعذّر تجهيز التقرير'))}</div>`;
+      return null;
+    }
+    const frame = document.createElement('iframe');
+    frame.className = 'rep-frame';
+    frame.title = T('معاينة التقرير');
+    // الارتفاع بيتظبط على طول التقرير (من غير سكرول جوه سكرول)، وبيتعاد
+    // حسابه لما الخط يحمّل أو الشاشة تتلف/تكبر
+    const fit = () => {
+      try {
+        const doc = frame.contentDocument;
+        if (doc && doc.body) frame.style.height = Math.ceil(doc.body.getBoundingClientRect().height + 30) + 'px';
+      } catch (e) { /* ignore */ }
+    };
+    frame.addEventListener('load', () => {
+      fit();
+      try {
+        const doc = frame.contentDocument;
+        if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(fit);
+        if (window.ResizeObserver) new ResizeObserver(fit).observe(doc.body);
+      } catch (e) { /* ignore */ }
+    });
+    const loaded = new Promise(resolve => frame.addEventListener('load', resolve, { once: true }));
+    frame.srcdoc = html;
+    box.innerHTML = '';
+    box.appendChild(frame);
+    await loaded;
+    if (seq !== reportsState.loadSeq) return null;
+    reportsState.previewKey = JSON.stringify(q);
+    return frame;
+  } catch (e) {
+    if (seq === reportsState.loadSeq) {
+      box.innerHTML = `<div class="empty" style="color:var(--danger)"><div class="icon">⚠️</div>${T('تعذّر الاتصال بالسيرفر — حاول تاني')}</div>`;
+    }
+    return null;
+  }
+}
+
+/**
+ * 📄 حفظ PDF — بيعمل ملف PDF من المعاينة نفسها ويحمّله على طول، من غير
+ * نافذة الطباعة (اللي في موبايلات ومتصفحات كتير مش بتفتح أو مفيهاش
+ * "Save as PDF"). لو الفلاتر اتغيرت من آخر معاينة، بيعرض التقرير الجديد الأول.
+ */
+async function reportsSavePdf() {
+  const q = reportsReadFilters();
+  const btn = document.getElementById('repPdfBtn');
+  if (!q || !btn || btn.disabled) return;
+  const oldLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = T('جاري تجهيز ملف الـ PDF…');
+  try {
+    let frame = document.querySelector('#repPreview .rep-frame');
+    if (!frame || reportsState.previewKey !== JSON.stringify(q)) frame = await reportsLoadPreview();
+    const win = frame && frame.contentWindow;
+    if (!win || typeof win.hsePrintSavePdf !== 'function') throw new Error('preview not ready');
+    const r = await win.hsePrintSavePdf({
+      silent: true,
+      onProgress: t => { btn.textContent = t; },
+    });
+    if (r) showToast(`${T('✅ اتحفظ ملف الـ PDF')} (${r.pages} ${T('صفحة')})`, 'success');
+  } catch (e) {
+    showToast(T('تعذّر تجهيز ملف الـ PDF — جرّب تاني، أو استخدم "طباعة" واختار Save as PDF'), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldLabel;
+  }
+}
+
+function reportsPrint() {
+  const q = reportsReadFilters();
+  if (!q) return;
+  openPrintWithAuth(`/print/report?${new URLSearchParams({ ...q, autoprint: '1' }).toString()}`);
+}
+
+async function reportsSendMail() {
+  const q = reportsReadFilters();
+  const input = document.getElementById('repMailTo');
+  const btn = document.getElementById('repSendBtn');
+  if (!q || !input || !btn) return;
+  const recipients = input.value.trim();
+  const list = recipients.split(/[\s,;،]+/).filter(Boolean);
+  if (!list.length) { showToast(T('اكتب الإيميل اللي هيتبعتله التقرير'), 'error'); input.focus(); return; }
+  if (list.length > 5) { showToast(T('أقصى عدد 5 إيميلات في المرة'), 'error'); return; }
+  const bad = list.find(m => !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(m));
+  if (bad) { showToast(`${T('الإيميل ده مش صحيح:')} ${bad}`, 'error'); input.focus(); return; }
+
+  btn.disabled = true;
+  const oldLabel = btn.textContent;
+  btn.textContent = T('جارِ الإرسال…');
+  try {
+    const res = await authFetch('/api/reports/email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipients: list.join(', '), query: q }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      try { localStorage.setItem(REPORT_MAIL_KEY, list.join(', ')); } catch (e) { /* ignore */ }
+      showToast(`${T('✅ التقرير اتبعت على:')} ${(data.sentTo || list).join('، ')}`, 'success');
+    } else if (res.status === 429) {
+      showToast(data.error || T('بعت تقارير كتير في ساعة واحدة — استنى شوية وحاول تاني'), 'error');
+    } else {
+      showToast(data.error || T('تعذّر إرسال التقرير — حاول تاني'), 'error');
+    }
+  } catch (e) {
+    showToast(T('تعذّر الاتصال بالسيرفر — حاول تاني'), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldLabel;
+  }
+}
+
 const AUDIT_ENTITY_LABELS = {
   permit: 'تصريح عمل', hazard: 'بلاغ خطورة', training: 'محاضرة', drill: 'تجربة طوارئ',
   'inspection-section': 'قسم فحص', 'inspection-item': 'صنف فحص', 'inspection-record': 'نتيجة فحص',
-  database: 'قاعدة البيانات', employee: 'موظف'
+  database: 'قاعدة البيانات', employee: 'موظف', report: 'تقرير'
 };
 // كل إجراء بدائرة ملوّنة تدل على نوعه دلاليًا (أخضر=اعتماد، أحمر=رفض/حذف،
 // كحلي=إنشاء، برتقالي=تعديل) بدل إيموجي — شكل أقرب لسجل تدقيق مؤسسي رسمي.
@@ -11577,6 +11999,7 @@ const AUDIT_ACTION_META = {
   'import-legacy-excel':  { glyph: '↓', cls: 'a-import',  label: 'استيراد' },
   reset_password:        { glyph: '⟲', cls: 'a-update',  label: 'إعادة تعيين كلمة السر' },
   email_backup:          { glyph: '✉', cls: 'a-import',  label: 'إرسال بالإيميل' },
+  email:                 { glyph: '✉', cls: 'a-import',  label: 'إرسال بالإيميل' },
 };
 
 let auditLogState = { entityType: '', q: '' };

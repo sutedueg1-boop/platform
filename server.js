@@ -6,6 +6,13 @@
 
 require('dotenv').config();
 
+// ── توقيت مصر لكل التواريخ اللي السيرفر بيكتبها ─────────────────
+// سيرفرات الاستضافة (Railway) شغالة بتوقيت UTC، فأي وقت بيتطبع في
+// المستندات/الإكسيل/صفحات التحقق كان بيطلع متأخر ساعتين أو 3 عن توقيت
+// المصنع، وأي "النهارده" بعد نص الليل كان بيطلع امبارح. التخزين نفسه
+// (ISO/UTC) مش بيتأثر. ممكن تغييره بمتغير TZ لو المصنع في توقيت تاني.
+process.env.TZ = process.env.TZ || 'Africa/Cairo';
+
 const express    = require('express');
 const fs         = require('fs');
 const path       = require('path');
@@ -21,9 +28,11 @@ const compression = require('compression');
 const { parsePermitsWorkbook } = require('./lib/permits-excel-parser');
 const { db: sqliteDb, makeStore, exportAll: dbExportAll, importAll: dbImportAll, DB_PATH } = require('./lib/db');
 const { migrateJsonToDb, sweepOrphanJsonFiles } = require('./lib/migrate-json-to-db');
-const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
-const { prepareBidiText } = require('./lib/pdf-arabic');
+// قالب الطباعة الموحّد + محتوى مستندات التصريح/البلاغ (22 سبتمبر 2026)
+const { renderPrintDocument, esc: escHtmlPrint } = require('./lib/print-template');
+const { buildPermitPrint, buildHazardPrint, buildDrillPrint, permitStatus, hazardStatus } = require('./lib/print-docs');
+const reports = require('./lib/reports');
 const chatbot = require('./lib/chatbot');
 const chatbotAnalytics = require('./lib/chatbot-analytics');
 const chatbotFollowup = require('./lib/chatbot-followup');
@@ -325,8 +334,26 @@ app.use((req, res, next) => {
 
 // ── SEO & AI Bots Endpoints ────────────────────────────────────
 app.get('/robots.txt', (req, res) => {
+  // الصفحة الرئيسية بس اللي تتفهرس — المستندات (طباعة/تحقق) والملفات
+  // المرفوعة والـ API فيها بيانات تشغيل ومالهاش لازمة في نتايج البحث.
+  const base = siteBaseUrl(req);
   res.type('text/plain');
-  res.send("User-agent: *\nAllow: /\nDisallow: /api/\n");
+  res.send([
+    'User-agent: *',
+    'Allow: /$',
+    'Disallow: /api/',
+    'Disallow: /print/',
+    'Disallow: /verify/',
+    'Disallow: /uploads/',
+    base ? `Sitemap: ${base}/sitemap.xml` : '',
+    '',
+  ].join('\n'));
+});
+
+app.get('/sitemap.xml', (req, res) => {
+  const base = escHtmlPrint(siteBaseUrl(req));
+  res.type('application/xml');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>${base}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>\n</urlset>\n`);
 });
 
 app.get('/llms.txt', (req, res) => {
@@ -336,12 +363,34 @@ app.get('/llms.txt', (req, res) => {
 
 // ── Middleware ────────────────────────────────────────────────
 // Tighter payload limit — workers submit text only; 2 MB is generous
-app.use(express.json({
-  limit: '50mb',
-  // جسم رسائل واتساب الخام محتاجينه عشان نتحقق من توقيع ميتا (X-Hub-Signature-256)
-  verify: (req, res, buf) => { if (req.originalUrl && req.originalUrl.startsWith('/api/whatsapp/webhook')) req.rawBody = buf; }
-}));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// ── حجم الطلبات (22 سبتمبر 2026) ───────────────────────────────
+// قبل كده أي مسار (حتى تسجيل الدخول، ومن غير أي جلسة) كان بيقبل جسم JSON
+// لحد 50 ميجا — طلبات قليلة كانت كفاية تشغّل المعالج والذاكرة للآخر وتوقّف
+// السيرفر. دلوقتي الحد العادي 2 ميجا، والحد الكبير بس للمسارات اللي بترفع
+// ملفات فعلاً (إكسيل / نسخة احتياطية / صورة بلاغ / صور الرسومات)، وبشرط
+// إن الطلب معاه جلسة سليمة — غير كده بيتعامل بالحد الصغير.
+// جسم رسائل واتساب الخام محتاجينه عشان نتحقق من توقيع ميتا (X-Hub-Signature-256)
+const keepWhatsappRawBody = (req, res, buf) => { if (req.originalUrl && req.originalUrl.startsWith('/api/whatsapp/webhook')) req.rawBody = buf; };
+const jsonSmall = express.json({ limit: '2mb', verify: keepWhatsappRawBody });
+const jsonLarge = express.json({ limit: '50mb', verify: keepWhatsappRawBody });
+const LARGE_BODY_ROUTES = [
+  /^\/api\/hazards$/,                                   // بلاغ بصورة (لحد 8 ميجا)
+  /^\/api\/(hazards|permits|trainings|penalties)\/upload-excel$/,
+  /^\/api\/employees\/import-excel$/,
+  /^\/api\/admin\/backup\/import$/,
+  /^\/api\/inspections\/(sections\/[^/]+\/import-legacy-excel|import-legacy-auto)$/,
+  /^\/api\/dashboard\/export-(excel-charts|powerbi)$/,
+];
+app.use((req, res, next) => {
+  if (!LARGE_BODY_ROUTES.some(re => re.test(req.path))) return jsonSmall(req, res, next);
+  const h = req.headers['authorization'];
+  const token = h && h.startsWith('Bearer ') ? h.slice(7) : null;
+  if (token) {
+    try { jwt.verify(token, JWT_SECRET); return jsonLarge(req, res, next); } catch (e) { /* جلسة مش سليمة → الحد الصغير */ }
+  }
+  return jsonSmall(req, res, next);
+});
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // ── Rate Limiters ─────────────────────────────────────────────
 /** Auth: max 60 login attempts per 15 min per IP (+ قفل لكل اسم مستخدم بعد 5 محاولات غلط) */
@@ -353,28 +402,42 @@ const loginLimiter = rateLimit({
   message: { error: 'تجاوزت عدد محاولات تسجيل الدخول. حاول مجدداً بعد 15 دقيقة.' }
 });
 
-/** Permit submission: max 30 new permits per 15 min per IP */
+// ── الحدود بتتحسب لكل شخص مش لكل IP (22 سبتمبر 2026) ──────────────
+// كل موبايلات المصنع على نفس الواي فاي بتطلع لبرّه بنفس الـ IP، فحد "15
+// محاولة حضور لكل IP" كان معناه إن أول 15 عامل بس في المحاضرة يقدروا
+// يسجلوا حضور والباقي يترفض — ونفس الكلام في تقديم التصاريح والبلاغات.
+// الحدود دي بقت بعد التحقق من الجلسة، ومفتاحها كود العامل أو حساب الأدمن.
+function perUserKey(req) {
+  if (req.worker && req.worker.empCode) return `w:${req.worker.empCode}`;
+  if (req.user && (req.user.id || req.user.username)) return `a:${req.user.id || req.user.username}`;
+  return `ip:${ipKeyGenerator(req.ip)}`;
+}
+
+/** Permit/hazard submission: max 30 per 15 min per person */
 const submitLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
+  keyGenerator: perUserKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'تجاوزت الحد المسموح لتقديم الطلبات. حاول مجدداً بعد 15 دقيقة.' }
 });
 
-/** Employee registration: max 20 per 15 min per IP */
+/** Employee phone update: max 20 per 15 min per person */
 const employeeLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
+  keyGenerator: perUserKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'تجاوزت عدد محاولات التسجيل. حاول مجدداً بعد 15 دقيقة.' }
 });
 
-/** Training Attendance: max 15 attempts per 15 min per IP */
+/** Training/drill attendance: max 15 attempts per 15 min per worker (يمنع كمان تخمين رمز الجلسة) */
 const attendLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 15,
+  keyGenerator: perUserKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'تجاوزت عدد محاولات تسجيل الحضور. حاول مجدداً بعد 15 دقيقة.' }
@@ -385,6 +448,7 @@ const attendLimiter = rateLimit({
 const trainingRequestLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 10,
+  keyGenerator: perUserKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'تجاوزت عدد طلبات المحاضرات المسموح بها. حاول مجدداً بعد شوية.' }
@@ -448,6 +512,67 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── ETag رخيص من "رقم نسخة" البيانات (22 سبتمبر 2026) ──────────────
+// الـ ETag الافتراضي بتاع Express بيتحسب من الرد نفسه — يعني السيرفر كان
+// بيقرا ويبني 5 ميجا (~100ms) مع كل سؤال كل 4 ثواني من كل شاشة، حتى لو
+// النتيجة في الآخر 304. هنا الـ ETag بيتبني من أرقام نسخ المجموعات + هوية
+// المستخدم (عشان الرد بيختلف حسب الدور/القسم)، فلو مفيش تغيير بنرد 304
+// فورًا من غير ما نلمس البيانات.
+function versionEtag(parts) {
+  return 'W/"v-' + crypto.createHash('sha1').update(parts.join('|')).digest('base64url').slice(0, 24) + '"';
+}
+function clientHasEtag(req, tag) {
+  const inm = req.headers['if-none-match'];
+  return Boolean(inm) && inm.split(',').some(s => s.trim() === tag);
+}
+/** بيحط الـ ETag ويرجع true لو العميل عنده نفس النسخة (والرد 304 اتبعت خلاص) */
+function replyNotModified(req, res, parts) {
+  const tag = versionEtag(parts);
+  res.setHeader('ETag', tag);
+  if (clientHasEtag(req, tag)) { res.status(304).end(); return true; }
+  return false;
+}
+/** هوية المستخدم اللي الرد بيعتمد عليها */
+function viewerKey(req) {
+  const u = req.user || {};
+  return req.worker ? `w:${req.worker.empCode}` : `a:${u.role || ''}:${u.department || ''}:${u.id || u.username || ''}`;
+}
+
+/**
+ * كاش للردود التقيلة (لوحة التحكم / المؤشرات التنفيذية): الحسبة (200-350ms
+ * على كل البيانات) بتتعمل مرة واحدة لكل مستخدم+فلتر، وتتعاد تلقائيًا أول ما
+ * أي بيانات تتغير أو تعدي دقيقة (عشان الحاجات المحسوبة بالوقت زي "آخر 7
+ * أيام" و"متأخر 48 ساعة"). الرد نفسه بالظبط — مجرد مش بيتحسب من الأول.
+ */
+function cacheJsonResponse({ stores, keyFn, bucketMs = 60 * 1000, max = 200 }) {
+  const cache = new Map();
+  return (req, res, next) => {
+    const key = keyFn(req);
+    if (!key) return next();
+    const ver = stores.map(s => s.version()).join('|') + '|' + Math.floor(Date.now() / bucketMs);
+    const hit = cache.get(key);
+    if (hit && hit.ver === ver) {
+      res.setHeader('ETag', hit.etag);
+      if (clientHasEtag(req, hit.etag)) return res.status(304).end();
+      return res.type('application/json').send(hit.body);
+    }
+    const origJson = res.json.bind(res);
+    res.json = (body) => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        const str = JSON.stringify(body);
+        const etag = versionEtag([key, ver]);
+        cache.delete(key);
+        cache.set(key, { ver, body: str, etag });
+        if (cache.size > max) cache.delete(cache.keys().next().value);
+        res.setHeader('ETag', etag);
+        return res.type('application/json').send(str);
+      }
+      return origJson(body);
+    };
+    next();
+  };
+}
+
 // ============================================================
 // 👁️ حساب المتابعة (عرض فقط) — hse_director
 // ============================================================
@@ -458,7 +583,10 @@ app.use((req, res, next) => {
 const VIEWER_ROLES = ['hse_director', 'ceo'];
 const VIEWER_ROLE = 'hse_director'; // للتوافق مع الكود القديم
 const VIEWER_ALLOWED_WRITES = [
-  /^\/api\/auth\/(change-password|profile|refresh)$/,
+  // link-token: رابط مؤقت للتحميل/الطباعة — قراءة بس، مش تعديل (22 سبتمبر 2026)
+  /^\/api\/auth\/(change-password|profile|refresh|link-token)$/,
+  // إرسال التقرير بالإيميل: بيقرا البيانات بس ويبعتها، مفيش أي تعديل
+  /^\/api\/reports\/email$/,
   /^\/api\/chatbot\/message$/,
   /^\/api\/dashboard\/export-(excel-charts|powerbi)$/,
   /^\/api\/notifications\/(mark-read|read-all|subscribe)$/,
@@ -490,6 +618,28 @@ app.get('/work-permits', (req, res) => {
 });
 app.get('/api/work-permits', (req, res) => {
   res.redirect('/api/storage/work-permits');
+});
+
+// ── الصفحة الرئيسية: الرابط الرسمي + بيانات المشاركة (SEO / معاينة واتساب) ──
+// index.html فيه __SITE_URL__ مكان عنوان الموقع (canonical / og:url / og:image)
+// — بيتحط هنا من PUBLIC_BASE_URL (أو عنوان الطلب نفسه لو مش متحدد) عشان
+// الروابط تبقى صح على أي دومين المنصة تتنقل له. (22 سبتمبر 2026)
+const INDEX_HTML_PATH = path.join(__dirname, 'public', 'index.html');
+let _indexHtmlCache = { mtimeMs: -1, html: '' };
+function siteBaseUrl(req) {
+  if (process.env.PUBLIC_BASE_URL) return String(process.env.PUBLIC_BASE_URL).replace(/\/+$/, '');
+  const host = String(req.get('host') || '');
+  return /^[a-z0-9.-]+(:\d{1,5})?$/i.test(host) ? `${req.protocol}://${host}` : '';
+}
+function renderIndexHtml(req) {
+  const st = fs.statSync(INDEX_HTML_PATH);
+  if (st.mtimeMs !== _indexHtmlCache.mtimeMs) {
+    _indexHtmlCache = { mtimeMs: st.mtimeMs, html: fs.readFileSync(INDEX_HTML_PATH, 'utf8') };
+  }
+  return _indexHtmlCache.html.split('__SITE_URL__').join(escHtmlPrint(siteBaseUrl(req)));
+}
+app.get(['/', '/index.html'], (req, res) => {
+  res.type('html').send(renderIndexHtml(req));
 });
 
 // Serve frontend static files.
@@ -1595,6 +1745,30 @@ async function ensureViewerAccountLocks() {
 // 🔑 JWT AUTHENTICATION MIDDLEWARES
 // ============================================================
 
+// ── قفل الجلسات فورًا (22 سبتمبر 2026) ─────────────────────────────
+// لما السوبر أدمن يمسح حساب، أو يغيّر صلاحيته، أو يمسح كلمة سر شخص معيّن:
+// أي توكن اتعمل قبل اللحظة دي بيترفض من الطلب الجاي على طول (مش بعد ما
+// التوكن يخلص). في الذاكرة بس — وبعد أي ريستارت، تجديد الجلسة (/refresh)
+// بيعمل نفس الفحص من بيانات الحساب المحفوظة.
+const _revokedSessions = new Map(); // "userId" أو "userId::empCode" → وقت القفل (ms)
+function revokeSessions(userId, empCode) {
+  if (!userId) return;
+  const key = empCode ? `${userId}::${normalizeEmpCode(empCode)}` : String(userId);
+  _revokedSessions.set(key, Date.now());
+}
+/** وقت إصدار التوكن بالملّي ثانية (التوكنات القديمة من غير iatMs: آخر لحظة في ثانية iat) */
+function tokenIssuedMs(decoded) {
+  const ms = Number(decoded && decoded.iatMs);
+  return Number.isFinite(ms) && ms > 0 ? ms : ((Number(decoded && decoded.iat) || 0) * 1000 + 999);
+}
+function isSessionRevoked(decoded) {
+  if (!decoded || !decoded.id || !_revokedSessions.size) return false;
+  const whole = _revokedSessions.get(String(decoded.id));
+  const member = _revokedSessions.get(`${decoded.id}::${normalizeEmpCode(decoded.empCode || '')}`);
+  const at = Math.max(whole || 0, member || 0);
+  return Boolean(at) && tokenIssuedMs(decoded) < at;
+}
+
 /**
  * يتحقق من Bearer Token في Authorization header.
  * يُضيف req.user = { id, username, role } عند النجاح.
@@ -1611,6 +1785,14 @@ function authenticateToken(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    // توكن الرابط (link token) صالح دقيقتين لمسار تحميل/طباعة واحد بس —
+    // ممنوع يُستخدم كتوكن جلسة كامل لأي API تاني (22 سبتمبر 2026).
+    if (decoded.purpose === 'link') {
+      return res.status(401).json({ error: 'غير مصرح: رابط مؤقت مش صالح هنا' });
+    }
+    if (isSessionRevoked(decoded)) {
+      return res.status(401).json({ error: 'الجلسة اتقفلت (الحساب اتعدّل أو اتمسح) — سجّل الدخول من جديد', expired: true });
+    }
     req.user = decoded; // { id, username, role, iat, exp }
     // توكن العامل (بيتعمل من دخول العامل بكلمة السر) مسموح بس على مسارات
     // العمال (authenticateSession) — مش على أي مسار إداري.
@@ -1730,6 +1912,21 @@ function authenticateTokenFlexible(req, res, next) {
     const decoded = jwt.verify(token, JWT_SECRET);
     if (decoded.role === 'worker') {
       return res.status(403).json({ error: 'غير مصرح: هذه العملية للإدارة فقط' });
+    }
+    // رابط مؤقت (من /api/auth/link-token): صالح بس للمسار اللي اتعمل له.
+    // (22 سبتمبر 2026) قبل كده الواجهة كانت بتحط توكن الجلسة الكامل في
+    // اللينك (?dt=...) فكان بيتسجّل في history المتصفح — على جهاز مشترك
+    // في المصنع أي حد يقدر يفتح الجلسة. دلوقتي اللينك فيه توكن دقيقتين
+    // لملف واحد. التوكن الكامل لسه مقبول هنا مؤقتًا عشان أي تاب قديم
+    // مفتوح بالواجهة القديمة ما يبوظش.
+    if (decoded.purpose === 'link') {
+      const reqPath = String(req.originalUrl || '').split('?')[0];
+      if (!decoded.path || !reqPath.startsWith(decoded.path)) {
+        return res.status(403).json({ error: 'الرابط ده مش مخصص للملف ده — ارجع للمنصة واضغط الزرار تاني' });
+      }
+    }
+    if (isSessionRevoked(decoded)) {
+      return res.status(401).json({ error: 'الجلسة اتقفلت (الحساب اتعدّل أو اتمسح) — سجّل الدخول من جديد', expired: true });
     }
     req.user = decoded;
     if (req.user.role === 'dept_admin') {
@@ -1919,9 +2116,12 @@ app.get('/api/storage/:key', authenticateSession, (req, res) => {
   }
   if (req.worker) {
     if (key !== 'work-permits') return res.status(403).json({ error: 'غير مصرح' });
+    if (replyNotModified(req, res, ['storage', key, viewerKey(req), storageStore.version()])) return;
     const mine = getPermitsArray().filter(p => normalizeEmpCode(p.employeeId || '') === req.worker.empCode);
     return res.json({ key, value: JSON.stringify(mine) });
   }
+  // نفس الرد لكل حسابات الإدارة (الفلترة حسب القسم بتحصل في الواجهة)
+  if (replyNotModified(req, res, ['storage', key, 'admin', storageStore.version()])) return;
   const data = readStorage();
   res.json({ key, value: data[key] || '[]' });
 });
@@ -2011,7 +2211,7 @@ function sanitizeNewPermit(p, id, employeeId) {
 
 // ── POST /api/permits — تقديم طلب تصريح عمل جديد (عامل بجلسته، أو إدارة)
 // رقم الطلب بيتولد في السيرفر (العميل مبقاش شايف كل التصاريح عشان يحسبه).
-app.post('/api/permits', submitLimiter, authenticateSession, async (req, res) => {
+app.post('/api/permits', authenticateSession, submitLimiter, async (req, res) => {
   const p = req.body && req.body.permit;
   if (!p || typeof p !== 'object' || Array.isArray(p)) {
     return res.status(400).json({ error: 'بيانات الطلب غير صالحة' });
@@ -2476,7 +2676,7 @@ app.post('/api/permits/upload-excel', authenticateToken, requireRole('super_admi
   }
 });
 
-app.post('/api/hazards', submitLimiter, authenticateSession, async (req, res) => {
+app.post('/api/hazards', authenticateSession, submitLimiter, async (req, res) => {
   const payload = req.body || {};
   // العامل: اسمه وكوده من جلسته (مش من الفورم) — محدش يقدر يبلّغ باسم حد تاني
   if (req.worker) {
@@ -2625,23 +2825,13 @@ app.get('/api/hazards/employee-stats', authenticateToken, requireRole('super_adm
 });
 
 app.get('/api/hazards', authenticateToken, requireRole('super_admin', 'hse_admin', 'dept_admin', 'maint_admin'), async (req, res) => {
-  let hazards = readHazards();
-  let changed = false;
-  const now = new Date().toISOString();
-  const readerName = sanitizeStr(req.user.name || req.user.username || 'المشرف', 100);
-
-  hazards.forEach(h => {
-    if (!h.seenAt && req.user.role !== 'maint_admin') {
-      h.seenAt = now;
-      h.seenBy = readerName;
-      changed = true;
-    }
-  });
-
-  if (changed) {
-    writeHazards(hazards);
+  // لو مفيش أي تغيير من آخر مرة الشاشة سألت → 304 فورًا
+  if (clientHasEtag(req, versionEtag(['hazards', viewerKey(req), hazardsStore.version()]))) {
+    return res.status(304).end();
   }
-  
+  const allHazards = readHazards();
+  let hazards = allHazards;
+
   if (req.user.role === 'dept_admin' && req.user.department) {
     const legacyNames = LEGACY_DEPARTMENT_ALIASES[req.user.department] || [];
     hazards = hazards.filter(h => h.department === req.user.department || legacyNames.includes(h.department));
@@ -2655,6 +2845,22 @@ app.get('/api/hazards', authenticateToken, requireRole('super_admin', 'hse_admin
     );
   }
 
+  // "تمت المشاهدة" (بتظهر للعامل اللي بلّغ): بتتسجل بس للبلاغات اللي
+  // الشخص ده بيشوفها فعلاً. (22 سبتمبر 2026) قبل كده أدمن أي قسم كان
+  // بيعلّم على بلاغات المصنع كله "اتشافت" باسمه أول ما يفتح الشاشة، وحسابات
+  // المتابعة (عرض بس) كانت بتكتب في البيانات من طلب قراءة.
+  const canMarkSeen = ['super_admin', 'hse_admin', 'dept_admin'].includes(req.user.role);
+  if (canMarkSeen) {
+    const now = new Date().toISOString();
+    const readerName = sanitizeStr(req.user.name || req.user.username || 'المشرف', 100);
+    let changed = false;
+    hazards.forEach(h => {
+      if (!h.seenAt) { h.seenAt = now; h.seenBy = readerName; changed = true; }
+    });
+    if (changed) writeHazards(allHazards);
+  }
+
+  res.setHeader('ETag', versionEtag(['hazards', viewerKey(req), hazardsStore.version()]));
   res.json({ hazards });
 });
 
@@ -2666,6 +2872,7 @@ app.get('/api/my-hazards/:name', authenticateSession, (req, res) => {
   if (!reporterName && !empCodeQ) {
     return res.status(400).json({ error: 'الاسم أو الكود الوظيفي مطلوب' });
   }
+  if (replyNotModified(req, res, ['my-hazards', viewerKey(req), reporterName, empCodeQ, hazardsStore.version()])) return;
   let hazards = readHazards();
   const myHazards = hazards.filter(h => {
     // Match by employee code first (works for both live reports and old bulk-imported
@@ -3481,7 +3688,13 @@ app.patch('/api/permits/:id/worker-close', authenticateSession, async (req, res)
 // قفل مؤقت لكل اسم مستخدم بعد 5 محاولات غلط (بالإضافة لحد الـ IP في loginLimiter)
 const ADMIN_LOGIN_MAX_FAILS = 5;
 const ADMIN_LOGIN_LOCK_MS = 15 * 60 * 1000;
-const _adminLoginFails = new Map(); // username -> { count, lockedUntil }
+const _adminLoginFails = new Map(); // username[::code] -> { count, lockedUntil, firstAt }
+
+// هاش bcrypt حقيقي بنقارن بيه لما اسم المستخدم مش موجود — عشان وقت الرد
+// يبقى زي وقت الباسورد الغلط بالظبط. (22 سبتمبر 2026) الهاش الثابت اللي
+// كان مستخدم قبل كده مش بصيغة bcrypt صالحة، فالمقارنة كانت بترجع فورًا
+// وأي حد يقدر يعرف أسماء الحسابات من سرعة الرد.
+const DUMMY_BCRYPT_HASH = bcrypt.hashSync(crypto.randomBytes(12).toString('hex'), BCRYPT_ROUNDS);
 
 function adminLockMinutesLeft(username) {
   const st = _adminLoginFails.get(username);
@@ -3490,12 +3703,32 @@ function adminLockMinutesLeft(username) {
 }
 
 function recordAdminLoginFail(username) {
-  const st = _adminLoginFails.get(username) || { count: 0, lockedUntil: 0 };
-  if (st.lockedUntil && st.lockedUntil <= Date.now()) { st.count = 0; st.lockedUntil = 0; }
+  const now = Date.now();
+  let st = _adminLoginFails.get(username);
+  // المحاولات الغلط بتتنسي بعد 15 دقيقة (قبل كده غلطة من أسبوع كانت لسه
+  // بتتحسب، فممكن حد يتقفل من أول غلطة بعد كام يوم)
+  if (!st || (st.lockedUntil && st.lockedUntil <= now) || (!st.lockedUntil && now - (st.firstAt || 0) > ADMIN_LOGIN_LOCK_MS)) {
+    st = { count: 0, lockedUntil: 0, firstAt: now };
+  }
   st.count++;
-  if (st.count >= ADMIN_LOGIN_MAX_FAILS) st.lockedUntil = Date.now() + ADMIN_LOGIN_LOCK_MS;
+  if (st.count >= ADMIN_LOGIN_MAX_FAILS) st.lockedUntil = now + ADMIN_LOGIN_LOCK_MS;
   _adminLoginFails.set(username, st);
   return Math.max(0, ADMIN_LOGIN_MAX_FAILS - st.count);
+}
+
+// تنظيف دوري — من غيره الخريطة بتكبر للأبد مع كل اسم مستخدم اتكتب غلط
+setInterval(() => {
+  const now = Date.now();
+  _adminLoginFails.forEach((st, k) => {
+    const expired = st.lockedUntil ? st.lockedUntil <= now : now - (st.firstAt || 0) > ADMIN_LOGIN_LOCK_MS;
+    if (expired) _adminLoginFails.delete(k);
+  });
+}, 10 * 60 * 1000).unref();
+
+function adminLoginFailMessage(left) {
+  return left > 0
+    ? `اسم المستخدم أو كلمة المرور غير صحيحة — فاضل ${left} محاولات قبل قفل الحساب 15 دقيقة`
+    : 'اسم المستخدم أو كلمة المرور غير صحيحة — الحساب اتقفل 15 دقيقة';
 }
 
 // ── POST /api/auth/login — تسجيل الدخول (rate-limited)
@@ -3517,13 +3750,22 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const empCodeStr = String(empCode || '').trim();
   const searchCode = normalizeEmpCode(empCodeStr);
 
+  // مفتاح القفل بقى لكل (حساب + كود) مش للحساب كله — عشان محاولات غلط من
+  // شخص واحد متقفلش زمايله في نفس القسم برّه الحساب.
+  const lockKey = searchCode ? `${usernameStr}::${searchCode}` : usernameStr;
+  const lockLeft = adminLockMinutesLeft(lockKey);
+  if (lockLeft) {
+    return res.status(429).json({ error: `محاولات غلط كتير على الحساب ده — استنى ${lockLeft} دقيقة وجرب تاني` });
+  }
+
   // Find user ignoring case
   const user = users.find(u => String(u.username || '').trim().toLowerCase() === usernameStr);
   if (!user) {
-    console.log(`[LOGIN ERROR] Username not found: ${usernameStr}`);
-    // Fake bcrypt to prevent timing attacks
-    await bcrypt.compare(password, '$2b$12$invalidhashtopreventtimingattack000000000000');
-    return res.status(401).json({ error: `اسم المستخدم غير موجود: ${usernameStr}` });
+    // نفس الوقت ونفس الرسالة ونفس العدّاد بتوع الباسورد الغلط — عشان محدش
+    // يقدر يعرف إذا كان اسم المستخدم موجود ولا لأ (22 سبتمبر 2026).
+    await bcrypt.compare(String(password), DUMMY_BCRYPT_HASH);
+    console.log(`[LOGIN ERROR] Unknown username attempt`);
+    return res.status(401).json({ error: adminLoginFailMessage(recordAdminLoginFail(lockKey)) });
   }
 
   // كلمة سر شخصية لكل شخص تحت الحساب المشترك (بالكود الوظيفي) — إضافة 15
@@ -3534,14 +3776,6 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   // منه يعمل كلمة سره الشخصية فورًا (needsPersonalPassword تحت) — ومن
   // لحظتها كلمة السر المشتركة ما بتشتغلش لكوده هو تحديدًا تاني.
   const memberCred = (searchCode && user.memberCredentials && user.memberCredentials[searchCode]) || null;
-
-  // مفتاح القفل بقى لكل (حساب + كود) مش للحساب كله — عشان محاولات غلط من
-  // شخص واحد متقفلش زمايله في نفس القسم برّه الحساب.
-  const lockKey = searchCode ? `${usernameStr}::${searchCode}` : usernameStr;
-  const lockLeft = adminLockMinutesLeft(lockKey);
-  if (lockLeft) {
-    return res.status(429).json({ error: `محاولات غلط كتير على الحساب ده — استنى ${lockLeft} دقيقة وجرب تاني` });
-  }
 
   // كلمات السر كلها متشفرة bcrypt (migratePasswordsIfNeeded بيشفّر أي نص عادي
   // عند التشغيل) — اتشال الـ fallback اللي كان بيقارن كلمة سر نص عادي.
@@ -3555,7 +3789,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   if (!isMatch) {
     const left = recordAdminLoginFail(lockKey);
     console.log(`[LOGIN ERROR] Invalid password for username: ${usernameStr}`);
-    return res.status(401).json({ error: left > 0 ? `كلمة المرور غير صحيحة — فاضل ${left} محاولات قبل قفل الحساب 15 دقيقة` : 'كلمة المرور غير صحيحة — الحساب اتقفل 15 دقيقة' });
+    return res.status(401).json({ error: adminLoginFailMessage(left) });
   }
   _adminLoginFails.delete(lockKey);
 
@@ -3659,7 +3893,8 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   }
   if (tokenPayload.username === 'hse_admin') tokenPayload.role = 'hse_admin';
 
-  const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+  // iatMs: وقت الإصدار بالملّي ثانية — عشان قفل الجلسات يبقى دقيق (iat بالثانية بس)
+  const token = jwt.sign({ ...tokenPayload, iatMs: Date.now() }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 
   // بيانات صاحب الحساب: مربوطة بالكود الوظيفي اللي دخل بيه، مش بالحساب نفسه —
   // فلو الحساب مشترك (أدمن قسم مثلاً) وجه حد تاني بكوده، هيتطلب منه يسجّل
@@ -4023,18 +4258,74 @@ app.patch('/api/auth/phone', authenticateToken, async (req, res) => {
 
 // ── POST /api/auth/refresh — تجديد الـ Token (للجلسات الطويلة)
 app.post('/api/auth/refresh', authenticateToken, (req, res) => {
-  // لازم القسم يفضل في التوكن الجديد — من غيره أدمن القسم كان بيشوف كل الأقسام
+  // (22 سبتمبر 2026) قبل كده التجديد كان بينسخ التوكن القديم زي ما هو —
+  // فالحساب اللي اتمسح أو اتغيرت صلاحيته كان بيفضل شغال بالصلاحية القديمة
+  // للأبد (الواجهة بتجدد كل نص ساعة). دلوقتي التجديد بيتأكد إن الحساب لسه
+  // موجود ومقفولش، وبياخد الصلاحية والقسم من الحساب نفسه.
+  let users = [];
+  try { users = JSON.parse(readStorage()['app-users'] || '[]'); } catch (e) { users = []; }
+  const stored = users.find(u => (req.user.id && u.id === req.user.id))
+    || users.find(u => String(u.username || '').toLowerCase() === String(req.user.username || '').toLowerCase());
+  const code = normalizeEmpCode(req.user.empCode || '');
+  const issuedMs = tokenIssuedMs(req.user);
+  const revokedMs = stored ? Math.max(
+    Date.parse(stored.sessionsRevokedAt || '') || 0,
+    Date.parse((stored.revokedMembers || {})[code] || '') || 0
+  ) : 0;
+  const lockedCode = stored && stored.empCode ? normalizeEmpCode(stored.empCode) : '';
+  const allowed = stored && Array.isArray(stored.allowedEmpCodes) && stored.allowedEmpCodes.length
+    ? stored.allowedEmpCodes.map(c => normalizeEmpCode(c)) : null;
+  if (!stored || (revokedMs && issuedMs < revokedMs) || (lockedCode && code && lockedCode !== code) || (allowed && code && !allowed.includes(code))) {
+    return res.status(401).json({ error: 'الجلسة اتقفلت — سجّل الدخول من جديد', expired: true });
+  }
+
   const tokenPayload = {
+    id:         stored.id || req.user.id,
+    username:   stored.username,
+    role:       stored.role || req.user.role,
+    name:       req.user.name,
+    fullName:   req.user.fullName || req.user.name,
+    empCode:    req.user.empCode,
+    // أدمن القسم/الصيانة: القسم من الحساب (لو اتنقل لقسم تاني يبان فورًا)
+    department: ['dept_admin', 'maint_admin'].includes(stored.role) ? (stored.department || '') : (req.user.department || ''),
+  };
+  // نفس تحويلات الأدوار القديمة اللي في تسجيل الدخول بالظبط
+  if (tokenPayload.role === 'dept_admin') {
+    if (tokenPayload.department && tokenPayload.department.toUpperCase() === 'HSE') {
+      tokenPayload.role = 'hse_admin';
+      tokenPayload.department = '';
+    } else if (['Electrical Maintenance', 'Mechanical Maintenance', 'Preventive Maintenance'].includes(tokenPayload.department)) {
+      tokenPayload.role = 'maint_admin';
+    }
+  }
+  if (tokenPayload.username === 'hse_admin') tokenPayload.role = 'hse_admin';
+  const newToken = jwt.sign({ ...tokenPayload, iatMs: Date.now() }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+  res.json({ success: true, token: newToken });
+});
+
+// ── POST /api/auth/link-token — رابط مؤقت لتحميل/طباعة ملف واحد ──────
+// الروابط اللي بتتفتح في تاب جديد أو بتنزّل ملف مش بتقدر تبعت هيدر
+// Authorization، فكانت الواجهة بتحط توكن الجلسة كله في اللينك (?dt=)
+// ويتسجّل في history المتصفح. دلوقتي: توكن صالح دقيقتين، لمسار واحد بس،
+// ومرفوض كتوكن جلسة في أي API تاني. (22 سبتمبر 2026)
+const LINK_TOKEN_PATH_RE = /^\/(api\/[a-z0-9\-_/%.]+|print\/[a-z0-9\-_/%.]+)$/i;
+app.post('/api/auth/link-token', authenticateToken, (req, res) => {
+  const p = String((req.body && req.body.path) || '').split('?')[0];
+  if (!p || p.length > 300 || p.includes('..') || !LINK_TOKEN_PATH_RE.test(p)) {
+    return res.status(400).json({ error: 'مسار غير صالح' });
+  }
+  const linkPayload = {
     id:         req.user.id,
     username:   req.user.username,
     role:       req.user.role,
     name:       req.user.name,
     fullName:   req.user.fullName || req.user.name,
     empCode:    req.user.empCode,
-    department: req.user.department || ''
+    department: req.user.department || '',
+    purpose:    'link',
+    path:       p,
   };
-  const newToken = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
-  res.json({ success: true, token: newToken });
+  res.json({ token: jwt.sign(linkPayload, JWT_SECRET, { expiresIn: '2m' }) });
 });
 
 // ============================================================
@@ -4170,6 +4461,7 @@ app.delete('/api/users/:id',
       storage['app-users'] = JSON.stringify(newUsers);
 
       if (writeStorage(storage)) {
+        revokeSessions(userId); // أي جلسة مفتوحة بالحساب ده بتتقفل فورًا
         result = { status: 200, body: { success: true } };
       } else {
         result = { status: 500, body: { error: 'فشل حذف المستخدم' } };
@@ -4264,6 +4556,7 @@ app.put('/api/users/:id',
         result = { status: 400, body: { error: 'الدور غير صالح' } };
         return;
       }
+      const before = { username: users[idx].username, role: users[idx].role, department: users[idx].department || '', empCode: users[idx].empCode || '' };
       users[idx].name = name;
       users[idx].username = username;
       users[idx].role = role;
@@ -4280,9 +4573,18 @@ app.put('/api/users/:id',
         _adminLoginFails.delete(String(users[idx].username || '').toLowerCase());
       }
 
+      // تغيير الصلاحية/القسم/القفل أو كلمة سر جديدة من السوبر أدمن = الجلسات
+      // المفتوحة بالحساب ده بتتقفل (قبل كده كانت بتفضل شغالة بالصلاحية القديمة
+      // وبتتجدد للأبد). حسابه هو نفسه مش بيتقفل عليه.
+      const accessChanged = before.username !== users[idx].username || before.role !== users[idx].role
+        || before.department !== (users[idx].department || '') || before.empCode !== (users[idx].empCode || '');
+      const mustRevoke = users[idx].id !== req.user.id && (accessChanged || Boolean(newPassword));
+      if (mustRevoke) users[idx].sessionsRevokedAt = new Date().toISOString();
+
       storage['app-users'] = JSON.stringify(users);
 
       if (writeStorage(storage)) {
+        if (mustRevoke) revokeSessions(users[idx].id);
         result = { status: 200, body: { success: true } };
       } else {
         result = { status: 500, body: { error: 'فشل التحديث' } };
@@ -4325,8 +4627,11 @@ app.patch('/api/users/:id/reset-member-password',
       }
       memberName = users[idx].memberCredentials[empCode].name || '';
       delete users[idx].memberCredentials[empCode];
+      // جلسات الشخص ده بالحساب ده بتتقفل (فورًا + عند التجديد بعد أي ريستارت)
+      users[idx].revokedMembers = { ...(users[idx].revokedMembers || {}), [empCode]: new Date().toISOString() };
       storage['app-users'] = JSON.stringify(users);
       if (writeStorage(storage)) {
+        revokeSessions(users[idx].id, empCode);
         result = { status: 200, body: { success: true, message: 'تم مسح كلمة السر الشخصية — هيتطلب منه يعمل واحدة جديدة أول ما يدخل' } };
       } else {
         result = { status: 500, body: { error: 'فشل الحفظ' } };
@@ -4410,13 +4715,24 @@ function workerLockMinutesLeft(key) {
 
 /** يسجل محاولة غلط ويرجع عدد المحاولات الباقية قبل القفل */
 function recordWorkerLoginFail(key) {
-  const st = _workerLoginFails.get(key) || { count: 0, lockedUntil: 0 };
-  if (st.lockedUntil && st.lockedUntil <= Date.now()) { st.count = 0; st.lockedUntil = 0; }
+  const now = Date.now();
+  let st = _workerLoginFails.get(key);
+  // المحاولات الغلط بتتنسي بعد مدة القفل (زي دخول الإدارة بالظبط)
+  if (!st || (st.lockedUntil && st.lockedUntil <= now) || (!st.lockedUntil && now - (st.firstAt || 0) > WORKER_LOGIN_LOCK_MS)) {
+    st = { count: 0, lockedUntil: 0, firstAt: now };
+  }
   st.count++;
-  if (st.count >= WORKER_LOGIN_MAX_FAILS) st.lockedUntil = Date.now() + WORKER_LOGIN_LOCK_MS;
+  if (st.count >= WORKER_LOGIN_MAX_FAILS) st.lockedUntil = now + WORKER_LOGIN_LOCK_MS;
   _workerLoginFails.set(key, st);
   return Math.max(0, WORKER_LOGIN_MAX_FAILS - st.count);
 }
+setInterval(() => {
+  const now = Date.now();
+  _workerLoginFails.forEach((st, k) => {
+    const expired = st.lockedUntil ? st.lockedUntil <= now : now - (st.firstAt || 0) > WORKER_LOGIN_LOCK_MS;
+    if (expired) _workerLoginFails.delete(k);
+  });
+}, 10 * 60 * 1000).unref();
 
 // ── GET /api/worker-auth/status/:code — بعد ما العامل يكتب كوده: اسمه وقسمه
 // ووظيفته (بتظهر في شاشة الدخول) + هل عمل كلمة سر قبل كده ولا دي أول مرة.
@@ -4668,9 +4984,15 @@ app.post('/api/employees/import-excel',
 );
 
 // ── GET /api/employees — جلب كل الموظفين (محمي)
+// الكاش: القايمة بتتحسب من الموظفين + البلاغات + التدريب (~60ms) — بتتعاد بس لما حاجة منهم تتغير
+const employeesListCache = cacheJsonResponse({
+  stores: [employeesStore, hazardsStore, trainingsStore, workerCredsStore],
+  keyFn: req => 'emps:' + viewerKey(req) + ':' + req.originalUrl,
+});
 app.get('/api/employees',
   authenticateToken,
   requireRole('super_admin', 'hse_admin', 'dept_admin', 'maint_admin', 'issuer'),
+  employeesListCache,
   (req, res) => {
     let employees = readEmployees();
     
@@ -4816,7 +5138,7 @@ app.put('/api/employees/:code',
 // تنبيهات واتساب (تحديثات التصاريح، إلخ). بدون مصادقة JWT لأن العامل أصلاً
 // بيدخل بكوده الوظيفي بس (نفس نموذج الثقة المطبّق على كل مسارات العمال
 // التانية زي POST /api/hazards) — نفس الـ rate limiter المستخدم للتسجيل.
-app.patch('/api/employees/:code/phone', employeeLimiter, authenticateSession, async (req, res) => {
+app.patch('/api/employees/:code/phone', authenticateSession, employeeLimiter, async (req, res) => {
   const targetCode = normalizeEmpCode(req.params.code);
   if (req.worker && req.worker.empCode !== targetCode) return res.status(403).json({ error: 'غير مصرح' });
   const phone = sanitizeStr(req.body.phone || '', 20);
@@ -4879,6 +5201,7 @@ app.get('/api/trainings/topics', (req, res) => {
 });
 
 app.get('/api/trainings', authenticateToken, (req, res) => {
+  if (replyNotModified(req, res, ['trainings', 'admin', trainingsStore.version()])) return;
   res.json({ trainings: readTrainings() });
 });
 
@@ -4906,6 +5229,8 @@ function trainingTargetsEmployee(training, empCode, employees) {
 
 app.get('/api/trainings/worker/:empCode', authenticateSession, (req, res) => {
   const code = req.worker ? req.worker.empCode : normalizeEmpCode(req.params.empCode);
+  // الرد بيتغير مع البيانات ومع الوقت (مهلة مراجعة التسجيل) — فالـ ETag فيه الدقيقة الحالية
+  if (replyNotModified(req, res, ['trn-worker', viewerKey(req), code, trainingsStore.version(), employeesStore.version(), Math.floor(Date.now() / 60000)])) return;
   const trainings = readTrainings();
   const employeesForTargeting = readEmployees();
   const attCode = (a) => normalizeEmpCode(a.empCode || a.code || a.employeeCode || a.id || '');
@@ -4961,6 +5286,9 @@ app.get('/api/trainings/worker/:empCode', authenticateSession, (req, res) => {
   let safeActiveSession = null;
   if (activeSession) {
     safeActiveSession = { ...activeSession };
+    // رمز الجلسة (PIN) بيتعرض على شاشة القاعة عشان يثبت إن العامل موجود فعلاً —
+    // كان بيتبعت هنا لموبايل كل عامل فأي حد يقدر يسجّل حضور من برّه. (22 سبتمبر 2026)
+    delete safeActiveSession.sessionPin;
     // Only send if the worker themselves attended
     const meAttended = (activeSession.attendees || []).find(a => attCode(a) === code);
     safeActiveSession.attendees = meAttended ? [meAttended] : [];
@@ -5015,7 +5343,7 @@ function notifyAdminsNewTrainingRequest(reqRecord) {
 }
 
 // POST — عامل بيطلب محاضرة (من الموبايل بتاعه، بجلسته العادية)
-app.post('/api/training-requests', trainingRequestLimiter, authenticateSession, (req, res) => {
+app.post('/api/training-requests', authenticateSession, trainingRequestLimiter, (req, res) => {
   if (!req.worker) return res.status(403).json({ error: 'الخاصية دي للعمال بس' });
   const topicTitle = sanitizeStr((req.body || {}).topicTitle, 200);
   const note = sanitizeStr((req.body || {}).note, 500);
@@ -5440,7 +5768,7 @@ app.delete('/api/trainings/:id/permanent', authenticateToken, requireRole('super
   res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
 });
 
-app.post('/api/trainings/:id/attend', attendLimiter, authenticateSession, async (req, res) => {
+app.post('/api/trainings/:id/attend', authenticateSession, attendLimiter, async (req, res) => {
   // الحضور بيتسجل للعامل صاحب الجلسة بس (الأدمن عنده "إضافة حضور يدويًا")
   if (!req.worker) return res.status(403).json({ error: 'تسجيل الحضور من حساب العامل نفسه' });
   let empCode = req.worker.empCode;
@@ -6239,6 +6567,7 @@ app.get('/api/drills/export/:id', authenticateTokenFlexible, async (req, res) =>
 });
 
 app.get('/api/drills', authenticateToken, (req, res) => {
+  if (replyNotModified(req, res, ['drills', 'admin', drillsStore.version()])) return;
   res.json({ drills: readDrills() });
 });
 
@@ -6246,6 +6575,7 @@ app.get('/api/drills', authenticateToken, (req, res) => {
 // Worker Dashboard Endpoint (No JWT required)
 app.get('/api/drills/worker/:empCode', authenticateSession, (req, res) => {
   const code = req.worker ? req.worker.empCode : normalizeEmpCode(req.params.empCode);
+  if (replyNotModified(req, res, ['drl-worker', viewerKey(req), code, drillsStore.version()])) return;
   const drills = readDrills();
   const attCode = (a) => normalizeEmpCode(a.empCode || a.code || a.employeeCode || a.id || '');
   
@@ -6278,6 +6608,9 @@ app.get('/api/drills/worker/:empCode', authenticateSession, (req, res) => {
   let safeActiveSession = null;
   if (activeSession) {
     safeActiveSession = { ...activeSession };
+    // رمز الجلسة (PIN) بيتعرض على شاشة القاعة عشان يثبت إن العامل موجود فعلاً —
+    // كان بيتبعت هنا لموبايل كل عامل فأي حد يقدر يسجّل حضور من برّه. (22 سبتمبر 2026)
+    delete safeActiveSession.sessionPin;
     // Only send if the worker themselves attended
     const meAttended = (activeSession.attendees || []).find(a => attCode(a) === code);
     safeActiveSession.attendees = meAttended ? [meAttended] : [];
@@ -6421,7 +6754,7 @@ app.delete('/api/drills/:id/permanent', authenticateToken, requireRole('super_ad
   res.status(result ? result.status : 500).json(result ? result.body : { error: 'حدث خطأ غير متوقع أثناء المعالجة، حاول مرة أخرى' });
 });
 
-app.post('/api/drills/:id/attend', attendLimiter, authenticateSession, async (req, res) => {
+app.post('/api/drills/:id/attend', authenticateSession, attendLimiter, async (req, res) => {
   if (!req.worker) return res.status(403).json({ error: 'تسجيل الحضور من حساب العامل نفسه' });
   let empCode = req.worker.empCode;
   let { pin } = req.body || {};
@@ -6738,7 +7071,7 @@ async function buildDrillReportDocx(drill, report) {
         spacing: { after: 120 },
         children: [ new DocxImageRun({
           data: fs.readFileSync(COMPANY_LOGO_PATH),
-          transformation: { width: 150, height: 66 },
+          transformation: { width: 150, height: 71 },
           type: 'png',
         }) ],
       }));
@@ -7154,7 +7487,11 @@ function daysBetween(a, b) {
   return diff >= 0 ? diff : null;
 }
 
-app.get('/api/executive/overview', authenticateToken, requireRole('ceo', 'super_admin', 'hse_admin'), (req, res) => {
+const executiveOverviewCache = cacheJsonResponse({
+  stores: [storageStore, hazardsStore, trainingsStore, drillsStore, penaltiesStore, employeesStore, auditLogStore],
+  keyFn: req => `exec:${viewerKey(req)}:${req.originalUrl}`,
+});
+app.get('/api/executive/overview', authenticateToken, requireRole('ceo', 'super_admin', 'hse_admin'), executiveOverviewCache, (req, res) => {
   try {
     const storage = readStorage();
     let permits = storage['work-permits'];
@@ -7927,7 +8264,22 @@ app.get('/api/departments', authenticateToken, requireRole('super_admin', 'hse_a
 // ── Analytics / Dashboard API ─────────────────────────────────
 // GET /api/analytics — consolidated stats for the dashboard
 // Scoped by role: super_admin/hse_admin = global, dept_admin = their dept
-app.get('/api/analytics', async (req, res) => {
+// الكاش هنا قبل التحقق اليدوي من التوكن اللي جوه الراوت، فمفتاحه هو التوكن
+// نفسه (بعد التأكد إنه سليم ومش منتهي) + الفلاتر — يعني كل جلسة ليها ردها بس.
+const analyticsCache = cacheJsonResponse({
+  stores: [storageStore, hazardsStore, trainingsStore, drillsStore, penaltiesStore, employeesStore, workerCredsStore, subscriptionsStore],
+  keyFn: (req) => {
+    const h = req.headers['authorization'];
+    const token = h && h.startsWith('Bearer ') ? h.slice(7) : null;
+    if (!token) return null;
+    try {
+      const d = jwt.verify(token, JWT_SECRET);
+      if (d.purpose === 'link' || isSessionRevoked(d)) return null; // الراوت نفسه هيرفضه
+    } catch (e) { return null; }
+    return `an:${crypto.createHash('sha1').update(token).digest('base64url')}:${req.originalUrl}`;
+  },
+});
+app.get('/api/analytics', analyticsCache, async (req, res) => {
   try {
     let role = 'worker';
     let department = null;
@@ -7939,6 +8291,8 @@ app.get('/api/analytics', async (req, res) => {
     if (token) {
       try {
         const decoded = jwt.verify(token, JWT_SECRET);
+        if (decoded.purpose === 'link') return res.status(401).json({ error: 'غير مصرح: رابط مؤقت مش صالح هنا' });
+        if (isSessionRevoked(decoded)) return res.status(401).json({ error: 'الجلسة اتقفلت — سجّل الدخول من جديد', expired: true });
         role = decoded.role;
         department = decoded.department;
         // Dynamic role patches for legacy compatibility
@@ -8965,23 +9319,17 @@ app.post('/api/inspections/import-legacy-auto', authenticateToken, requireRole(.
 });
 
 // ============================================================
-// 📄 PDF EXPORT — تصدير PDF احترافي لتصريح العمل / بلاغ الخطورة
+// 📄 المستندات الرسمية (طباعة / إكسيل / وورد)
 // ============================================================
-// مستند رسمي بشعار الشركة، جاهز للطباعة، مع QR Code يفتح صفحة تحقق
-// عامة (بدون تسجيل دخول) تُظهر حالة التصريح/البلاغ لحظيًا — أي حد يمسح
-// الكود بموبايله يتأكد إن المستند شرعي ومطابق للنظام الفعلي، لا نسخة
-// معدَّلة أو منتهية الصلاحية. النصوص العربية تُجهَّز عبر lib/pdf-arabic.js
-// (PDFKit وحده لا يشكّل الحروف العربية ولا يرتبها bidi تلقائيًا) بخط
-// Amiri (assets/fonts/) — خط Cairo المستخدم في الواجهة لا يعمل بشكل
-// صحيح مع PDFKit (اختُبر). 11 سبتمبر 2026.
-const PDF_FONT_REGULAR = path.join(__dirname, 'assets', 'fonts', 'Amiri-Regular.ttf');
-const PDF_FONT_BOLD = path.join(__dirname, 'assets', 'fonts', 'Amiri-Bold.ttf');
-// شعار السويدي بوليمرز الرسمي — بيتحط في رأس كل مستند بيتطبع (تصاريح،
-// بلاغات، تقارير تجارب الطوارئ، وملفات الإكسيل). 12 سبتمبر 2026.
-const COMPANY_LOGO_PATH = path.join(__dirname, 'public', 'icons', 'elsewedy-logo.png');
-const PDF_LOGO_PATH = fs.existsSync(COMPANY_LOGO_PATH)
-  ? COMPANY_LOGO_PATH
-  : path.join(__dirname, 'public', 'icons', 'icon-512.png');
+// التصاريح والبلاغات وتقارير التجارب والتقرير الشامل بتتطبع من صفحات
+// HTML بالقالب الموحّد (lib/print-template.js) مع QR Code بيفتح صفحة تحقق
+// عامة (من غير تسجيل دخول) بتوضّح حالة المستند لحظيًا.
+// شعار السويدي بوليمرز الرسمي: نسخة شفافة ومقصوصة (197×93) معمولة للطباعة
+// — النسخة القديمة (elsewedy-logo.png) مربعة بخلفية رمادي وكانت بتتمطّ
+// في الإكسيل والوورد. (22 سبتمبر 2026)
+const COMPANY_LOGO_PATH = fs.existsSync(path.join(__dirname, 'public', 'icons', 'elsewedy-logo-print.png'))
+  ? path.join(__dirname, 'public', 'icons', 'elsewedy-logo-print.png')
+  : path.join(__dirname, 'public', 'icons', 'elsewedy-logo.png');
 
 /**
  * stampExcelHeader — بيضيف 3 صفوف فوق الجدول فيهم شعار الشركة + عنوان
@@ -9000,7 +9348,7 @@ function stampExcelHeader(wb, ws, title) {
     s.font = { size: 9, color: { argb: 'FF6B6B6B' } };
     ws.getRow(1).height = 16;
     ws.getRow(2).height = 20;
-    addCompanyLogoToSheet(wb, ws, { col: 0, row: 0, width: 110, height: 48 });
+    addCompanyLogoToSheet(wb, ws, { col: 0, row: 0, width: 110, height: 52 });
   } catch (e) {
     console.warn('[logo] تعذّر تجهيز رأس الملف:', e.message);
   }
@@ -9021,7 +9369,7 @@ function addCompanyLogoToSheet(wb, ws, opts = {}) {
     const imageId = wb.addImage({ filename: COMPANY_LOGO_PATH, extension: 'png' });
     ws.addImage(imageId, {
       tl: { col: opts.col != null ? opts.col : 0, row: opts.row != null ? opts.row : 0 },
-      ext: { width: opts.width || 120, height: opts.height || 52 },
+      ext: { width: opts.width || 120, height: opts.height || 57 },
       editAs: 'oneCell',
     });
     return true;
@@ -9030,90 +9378,9 @@ function addCompanyLogoToSheet(wb, ws, opts = {}) {
     return false;
   }
 }
-const PDF_PAGE_MARGIN = 46;
-
+/** الرابط الأساسي للمنصة (لروابط التحقق في الـ QR) — PUBLIC_BASE_URL لو متحدد */
 function pdfBaseUrl(req) {
   return process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`;
-}
-
-/** يرسم رأس المستند: الشعار + اسم المنصة + عنوان المستند */
-function drawPdfHeader(doc, titleAr, titleEn) {
-  const pageW = doc.page.width;
-  try { doc.image(PDF_LOGO_PATH, PDF_PAGE_MARGIN, PDF_PAGE_MARGIN, { width: 44 }); } catch (e) { /* logo optional */ }
-  doc.font(PDF_FONT_BOLD).fontSize(11).fillColor('#0F172A')
-    .text(prepareBidiText('Elsewedy Polymers — HSE Platform'), 0, PDF_PAGE_MARGIN + 2, { width: pageW - PDF_PAGE_MARGIN, align: 'right' });
-  doc.font(PDF_FONT_REGULAR).fontSize(9).fillColor('#64748B')
-    .text(prepareBidiText('السويدي للبوليمرات — منصة السلامة والصحة المهنية'), 0, PDF_PAGE_MARGIN + 18, { width: pageW - PDF_PAGE_MARGIN, align: 'right' });
-  doc.moveTo(PDF_PAGE_MARGIN, PDF_PAGE_MARGIN + 46).lineTo(pageW - PDF_PAGE_MARGIN, PDF_PAGE_MARGIN + 46)
-    .strokeColor('#E2E8F0').lineWidth(1).stroke();
-  doc.y = PDF_PAGE_MARGIN + 62;
-  doc.font(PDF_FONT_BOLD).fontSize(18).fillColor('#7C1D1D')
-    .text(prepareBidiText(titleAr), { align: 'right' });
-  if (titleEn) {
-    doc.font(PDF_FONT_REGULAR).fontSize(10).fillColor('#64748B')
-      .text(titleEn, { align: 'right' });
-  }
-  doc.moveDown(0.6);
-}
-
-/** شارة الحالة الملوّنة (معتمد / مرفوض / قيد المراجعة) */
-function drawPdfStatusStamp(doc, status) {
-  const map = {
-    approved: { label: 'معتمد — APPROVED', color: '#16A34A' },
-    rejected: { label: 'مرفوض — REJECTED', color: '#DC2626' },
-    closed:   { label: 'مغلق — CLOSED', color: '#334155' },
-    open:     { label: 'مفتوح — OPEN', color: '#D97706' },
-  };
-  const s = map[status] || { label: 'قيد المراجعة — PENDING', color: '#D97706' };
-  const boxW = 180, boxH = 26;
-  const x = doc.page.width - PDF_PAGE_MARGIN - boxW;
-  const y = doc.y;
-  doc.roundedRect(x, y, boxW, boxH, 6).lineWidth(1.4).strokeColor(s.color).stroke();
-  doc.font(PDF_FONT_BOLD).fontSize(11).fillColor(s.color)
-    .text(prepareBidiText(s.label), x, y + 7, { width: boxW, align: 'center' });
-  doc.y = y + boxH + 14;
-}
-
-/** صف "تسمية: قيمة" — يدعم عرض عدة أعمدة في نفس السطر */
-function drawPdfLabelValue(doc, label, value) {
-  const pageW = doc.page.width;
-  const usableW = pageW - PDF_PAGE_MARGIN * 2;
-  const y = doc.y;
-  doc.font(PDF_FONT_BOLD).fontSize(9.5).fillColor('#64748B')
-    .text(prepareBidiText(label), PDF_PAGE_MARGIN, y, { width: usableW, align: 'right' });
-  doc.font(PDF_FONT_REGULAR).fontSize(12).fillColor('#0F172A')
-    .text(prepareBidiText(value === 0 ? '0' : (value || '—')), PDF_PAGE_MARGIN, doc.y + 1, { width: usableW, align: 'right' });
-  doc.moveDown(0.55);
-}
-
-function drawPdfSectionTitle(doc, text) {
-  doc.moveDown(0.3);
-  doc.font(PDF_FONT_BOLD).fontSize(12).fillColor('#7C1D1D')
-    .text(prepareBidiText(text), PDF_PAGE_MARGIN, doc.y, { width: doc.page.width - PDF_PAGE_MARGIN * 2, align: 'right' });
-  doc.moveTo(PDF_PAGE_MARGIN, doc.y + 2).lineTo(doc.page.width - PDF_PAGE_MARGIN, doc.y + 2)
-    .strokeColor('#E2E8F0').lineWidth(0.7).dash(2, { space: 2 }).stroke();
-  doc.undash();
-  doc.moveDown(0.5);
-}
-
-/** يرسم QR Code التحقق + التذييل في أسفل آخر صفحة */
-async function drawPdfFooterWithQr(doc, verifyUrl, docId) {
-  try {
-    const qrBuffer = await QRCode.toBuffer(verifyUrl, { margin: 1, width: 200 });
-    const qrSize = 78;
-    const x = doc.page.width - PDF_PAGE_MARGIN - qrSize;
-    const y = doc.page.height - PDF_PAGE_MARGIN - qrSize - 26;
-    doc.image(qrBuffer, x, y, { width: qrSize, height: qrSize });
-    doc.font(PDF_FONT_REGULAR).fontSize(7.5).fillColor('#64748B')
-      .text(prepareBidiText('امسح للتحقق من صلاحية المستند وحالته لحظيًا'), x - 140, y + qrSize + 4, { width: qrSize + 140, align: 'center' });
-  } catch (e) {
-    console.error('[PDF] QR generation failed:', e);
-  }
-  doc.font(PDF_FONT_REGULAR).fontSize(7.5).fillColor('#94A3B8')
-    .text(
-      prepareBidiText(`تم إنشاء هذا المستند آليًا بواسطة HSE Platform — ${new Date().toLocaleString('ar-EG')} — ${docId}`),
-      PDF_PAGE_MARGIN, doc.page.height - PDF_PAGE_MARGIN - 14, { width: doc.page.width - PDF_PAGE_MARGIN * 2 - 140, align: 'right' }
-    );
 }
 
 function findPermitById(permitId) {
@@ -9125,113 +9392,18 @@ function findPermitById(permitId) {
 
 const PDF_EXPORT_ROLES = ['super_admin', 'hse_admin', 'dept_admin', 'maint_admin'];
 
-// لو حصل خطأ وسط تكوين الـ PDF لازم نفصل الـ stream عن الـ response الأول،
-// وإلا PDFKit يفضل يكتب في response اتقفل → "write after end" يوقّع السيرفر.
-function abortPdfStream(doc, res, message) {
-  if (doc) {
-    try { doc.unpipe(res); } catch (e) { /* الـ stream ممكن يكون اتقفل أصلاً */ }
-    try { doc.removeAllListeners('data'); doc.removeAllListeners('end'); } catch (e) { /* ignore */ }
-    try { if (typeof doc.destroy === 'function') doc.destroy(); } catch (e) { /* ignore */ }
-  }
-  if (res.headersSent) { try { res.end(); } catch (e) { /* ignore */ } return; }
-  res.status(500).json({ error: message });
+// ── روابط الـ PDF القديمة → صفحات الطباعة الجديدة ─────────────────
+// (22 سبتمبر 2026) ملفات PDFKit كانت بتكسّر العربي (مسافات بتضيع وأرقام
+// بتتعكس) فاتشالت، والروابط القديمة (من تاب مفتوح بنسخة قديمة من الواجهة)
+// بتتحوّل لصفحة الطباعة الجديدة بنفس التوكن بدل ما ترجع خطأ.
+function redirectToPrint(kind) {
+  return (req, res) => {
+    const dt = typeof req.query.dt === 'string' ? `?dt=${encodeURIComponent(req.query.dt)}` : '';
+    res.redirect(302, `/print/${kind}/${encodeURIComponent(req.params.id)}${dt}`);
+  };
 }
-
-// ── GET /api/permits/:id/pdf — تصدير تصريح عمل كـ PDF رسمي ──────
-app.get('/api/permits/:id/pdf', authenticateTokenFlexible, requireRole(...PDF_EXPORT_ROLES), async (req, res) => {
-  let doc = null;
-  try {
-    const permit = findPermitById(req.params.id);
-    if (!permit) return res.status(404).json({ error: 'التصريح غير موجود' });
-
-    doc = new PDFDocument({ size: 'A4', margin: PDF_PAGE_MARGIN, bufferPages: true });
-    res.setHeader('Content-Type', 'application/pdf');
-    setDownloadFilename(res, `تصريح عمل - ${permit.typeFullLabel || permit.typeLabel || ''} - ${permit.date || ''}`, 'pdf');
-    doc.pipe(res);
-
-    drawPdfHeader(doc, 'تصريح عمل', `Work Permit — ${permit.id}`);
-    drawPdfStatusStamp(doc, permit.status);
-
-    drawPdfSectionTitle(doc, 'بيانات التصريح');
-    drawPdfLabelValue(doc, 'رقم التصريح', permit.id);
-    drawPdfLabelValue(doc, 'نوع التصريح', permit.typeFullLabel || permit.typeLabel);
-    drawPdfLabelValue(doc, 'القسم', permit.department);
-    drawPdfLabelValue(doc, 'التاريخ', permit.date);
-    drawPdfLabelValue(doc, 'الوردية', permit.shift);
-    if (permit.timeFrom || permit.timeTo) drawPdfLabelValue(doc, 'من — إلى', `${permit.timeFrom || '—'} — ${permit.timeTo || '—'}`);
-    drawPdfLabelValue(doc, 'الموقع', permit.location);
-    drawPdfLabelValue(doc, 'المعدة/الآلة', permit.equipment);
-
-    drawPdfSectionTitle(doc, 'بيانات العامل');
-    drawPdfLabelValue(doc, 'اسم العامل', permit.workerName);
-    drawPdfLabelValue(doc, 'وصف العمل', permit.description);
-
-    if (Array.isArray(permit.checklist) && permit.checklist.length) {
-      drawPdfSectionTitle(doc, 'قائمة الفحص الأمنية');
-      permit.checklist.forEach(c => drawPdfLabelValue(doc, c.question, c.answer));
-    }
-
-    if (Array.isArray(permit.risks) && permit.risks.length) {
-      drawPdfSectionTitle(doc, 'تقييم المخاطر');
-      permit.risks.forEach((r, i) => drawPdfLabelValue(doc, `مصدر الخطر ${i + 1}`, `${r.source} — احتمالية×شدة=${r.score} — الإجراء: ${r.control || '—'}`));
-    }
-
-    drawPdfSectionTitle(doc, 'الاعتمادات');
-    drawPdfLabelValue(doc, 'مراجعة رئيس المنطقة', permit.areaHeadReviewedBy ? `${permit.areaHeadReviewedBy} — ${permit.areaHeadReviewedAt || ''}` : null);
-    drawPdfLabelValue(doc, 'مراجعة مسؤول السلامة', permit.safetyOfficerName ? `${permit.safetyOfficerName} — ${permit.reviewedAt || ''}` : (permit.reviewedBy ? `${permit.reviewedBy} — ${permit.reviewedAt || ''}` : null));
-    if (permit.reviewNote) drawPdfLabelValue(doc, 'ملاحظات المراجعة', permit.reviewNote);
-
-    const verifyUrl = `${pdfBaseUrl(req)}/verify/permit/${encodeURIComponent(permit.id)}`;
-    await drawPdfFooterWithQr(doc, verifyUrl, permit.id);
-    doc.end();
-  } catch (err) {
-    console.error('[PDF] Permit export failed:', err);
-    abortPdfStream(doc, res, 'فشل إنشاء ملف PDF');
-  }
-});
-
-// ── GET /api/hazards/:id/pdf — تصدير بلاغ خطورة كـ PDF رسمي ──────
-app.get('/api/hazards/:id/pdf', authenticateTokenFlexible, requireRole(...PDF_EXPORT_ROLES), async (req, res) => {
-  let doc = null;
-  try {
-    const hazard = readHazards().find(h => h.id === req.params.id);
-    if (!hazard) return res.status(404).json({ error: 'البلاغ غير موجود' });
-
-    doc = new PDFDocument({ size: 'A4', margin: PDF_PAGE_MARGIN, bufferPages: true });
-    res.setHeader('Content-Type', 'application/pdf');
-    setDownloadFilename(res, `بلاغ خطورة - ${hazard.department || ''} - ${hazard.date || ''}`, 'pdf');
-    doc.pipe(res);
-
-    drawPdfHeader(doc, 'بلاغ خطورة', `Hazard Report — ${hazard.id}`);
-    drawPdfStatusStamp(doc, hazard.status);
-
-    drawPdfSectionTitle(doc, 'بيانات البلاغ');
-    drawPdfLabelValue(doc, 'رقم البلاغ', hazard.id);
-    drawPdfLabelValue(doc, 'اسم المُبلِّغ', hazard.reporterName);
-    drawPdfLabelValue(doc, 'القسم', hazard.department);
-    drawPdfLabelValue(doc, 'المنطقة', hazard.area);
-    drawPdfLabelValue(doc, 'التاريخ', hazard.date);
-    drawPdfLabelValue(doc, 'مستوى الخطورة', hazard.riskLevel === 'H' ? 'مرتفع (H)' : hazard.riskLevel === 'M' ? 'متوسط (M)' : hazard.riskLevel === 'L' ? 'منخفض (L)' : hazard.riskLevel);
-
-    drawPdfSectionTitle(doc, 'الوصف والمعالجة');
-    drawPdfLabelValue(doc, 'وصف الخطورة', hazard.description);
-    drawPdfLabelValue(doc, 'الإصابة المحتملة', hazard.potentialInjury);
-    drawPdfLabelValue(doc, 'الحل المقترح', hazard.proposedSolution);
-    drawPdfLabelValue(doc, 'الإجراء المتخذ', hazard.actionTaken);
-
-    drawPdfSectionTitle(doc, 'المتابعة');
-    drawPdfLabelValue(doc, 'مسؤول السلامة', hazard.hseName);
-    drawPdfLabelValue(doc, 'أُسندت للصيانة', hazard.assignedToMaintenance);
-    if (hazard.resolvedAt) drawPdfLabelValue(doc, 'تاريخ الإغلاق', new Date(hazard.resolvedAt).toLocaleDateString('ar-EG'));
-
-    const verifyUrl = `${pdfBaseUrl(req)}/verify/hazard/${encodeURIComponent(hazard.id)}`;
-    await drawPdfFooterWithQr(doc, verifyUrl, hazard.id);
-    doc.end();
-  } catch (err) {
-    console.error('[PDF] Hazard export failed:', err);
-    abortPdfStream(doc, res, 'فشل إنشاء ملف PDF');
-  }
-});
+app.get('/api/permits/:id/pdf', redirectToPrint('permit'));
+app.get('/api/hazards/:id/pdf', redirectToPrint('hazard'));
 
 // ============================================================
 // ✅ صفحات التحقق العامة (QR Code) — بدون تسجيل دخول
@@ -9240,9 +9412,18 @@ app.get('/api/hazards/:id/pdf', authenticateTokenFlexible, requireRole(...PDF_EX
 // حتى لو صُوِّرت الصفحة الورقية ومُسِح الكود من أي شخص — تمامًا مثل
 // التحقق من تذكرة أو شهادة، هذا هو الغرض المقصود من QR Code أصلاً.
 function verifyPageHtml({ title, rows, statusLabel, statusColor }) {
+  // (22 سبتمبر 2026) الصفحة دي عامة (من غير دخول) وكانت بتحط بيانات
+  // التصريح/البلاغ في الـ HTML من غير تأمين — والـ CSP بيسمح بسكريبت
+  // داخلي، فأي قيمة فيها كود كانت هتشتغل عند أي حد يمسح الـ QR (XSS).
+  // دلوقتي كل قيمة بتعدّي على esc() قبل ما تدخل الصفحة.
+  const e = escHtmlPrint;
+  title = e(title);
+  statusLabel = e(statusLabel);
+  rows = (rows || []).map(r => [e(r[0]), r[1] === null || r[1] === undefined || r[1] === '' ? '' : e(r[1])]);
   return `<!DOCTYPE html>
 <html lang="ar" dir="rtl"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
 <title>${title} — HSE Platform</title>
 <style>
   body{font-family:'Cairo',Tahoma,sans-serif;background:#0F172A;color:#fff;margin:0;padding:24px;min-height:100vh;box-sizing:border-box;display:flex;align-items:center;justify-content:center;}
@@ -9257,6 +9438,7 @@ function verifyPageHtml({ title, rows, statusLabel, statusColor }) {
 </style></head>
 <body>
   <div class="card">
+    <img src="/icons/elsewedy-logo-print.png" alt="Elsewedy Polymers" style="height:44px;display:block;margin:0 0 10px">
     <div class="brand">Elsewedy Polymers — HSE Platform</div>
     <h1>${title}</h1>
     <div class="status">${statusLabel}</div>
@@ -9266,11 +9448,28 @@ function verifyPageHtml({ title, rows, statusLabel, statusColor }) {
 </body></html>`;
 }
 
+const VERIFY_TONE_COLORS = { success: '#16A34A', danger: '#DC2626', warning: '#D97706', info: '#2563EB', neutral: '#334155' };
+/**
+ * حالة المستند في صفحة التحقق. المحذوف من السلامة أو السوبر أدمن (أو
+ * المحذوف نهائيًا) بيبان "ملغي" مهما كانت حالته. حذف أدمن القسم لوحده
+ * معناه "شاله من قايمته" بس — التصريح لسه ساري عند السلامة فمش بيتلغي.
+ */
+function verifyStatus(rec, st) {
+  const db = rec && rec.deletedBy;
+  const pdb = rec && rec.permanentlyDeletedBy;
+  const cancelled = Boolean(rec && (rec.deleted || rec.isDeleted || rec.deletedAt))
+    || Boolean(db && typeof db === 'object' && (db.safetyAdmin || db.superAdmin))
+    || Boolean(pdb && typeof pdb === 'object' && Object.values(pdb).some(Boolean));
+  if (cancelled) return { label: 'ملغي — المستند ده اتحذف من المنصة', color: '#DC2626' };
+  return { label: st.label, color: VERIFY_TONE_COLORS[st.tone] || VERIFY_TONE_COLORS.neutral };
+}
+
 app.get('/verify/permit/:id', (req, res) => {
   const permit = findPermitById(req.params.id);
   if (!permit) return res.status(404).send(verifyPageHtml({ title: 'تصريح غير موجود', rows: [], statusLabel: 'غير صالح', statusColor: '#DC2626' }));
-  const statusMap = { approved: ['معتمد', '#16A34A'], rejected: ['مرفوض', '#DC2626'], closed: ['مغلق', '#334155'] };
-  const [label, color] = statusMap[permit.status] || ['قيد المراجعة', '#D97706'];
+  // (22 سبتمبر 2026) قبل كده أي حالة غير approved/rejected/closed بالظبط —
+  // زي closed_safe أو completed أو تصريح محذوف — كانت بتظهر "قيد المراجعة".
+  const { label, color } = verifyStatus(permit, permitStatus(permit.status));
   res.send(verifyPageHtml({
     title: `تصريح عمل ${permit.id}`,
     statusLabel: label, statusColor: color,
@@ -9283,11 +9482,173 @@ app.get('/verify/permit/:id', (req, res) => {
   }));
 });
 
+// ── صفحات الطباعة (HTML) — بديل PDFKit للتصاريح والبلاغات ──────────
+// PDFKit كان بيكسّر العربي (مسافات بتضيع، "٦٢٠٢" بدل 2026) وكل خانة كانت
+// بتاخد سطرين. الصفحات دي بتتبني من القالب الموحّد: العناوين والقيم جنب
+// بعض، شعار السويدي بوليمرز، وخانات توقيع — والمتصفح بيطبعها أو يحفظها
+// PDF مظبوط. نفس صلاحيات الـ PDF القديم بالظبط. (22 سبتمبر 2026)
+function sendPrintPage(res, html) {
+  res.set('Cache-Control', 'no-store');
+  res.type('html').send(html);
+}
+function printErrorPage(message) {
+  return renderPrintDocument({ title: 'تعذّر فتح المستند', sections: [{ kind: 'text', text: message }] });
+}
+
+app.get('/print/permit/:id', authenticateTokenFlexible, requireRole(...PDF_EXPORT_ROLES), async (req, res) => {
+  try {
+    const permit = findPermitById(req.params.id);
+    if (!permit) return res.status(404).type('html').send(printErrorPage('التصريح غير موجود أو اتمسح.'));
+    const verifyUrl = `${pdfBaseUrl(req)}/verify/permit/${encodeURIComponent(permit.id)}`;
+    const qrDataUrl = await QRCode.toDataURL(verifyUrl, { margin: 1, width: 220 }).catch(() => null);
+    sendPrintPage(res, renderPrintDocument(buildPermitPrint(permit, { qrDataUrl, autoPrint: req.query.autoprint === '1' })));
+  } catch (err) {
+    console.error('[print] permit failed:', err);
+    res.status(500).type('html').send(printErrorPage('حصل خطأ أثناء تجهيز المستند للطباعة.'));
+  }
+});
+
+app.get('/print/hazard/:id', authenticateTokenFlexible, requireRole(...PDF_EXPORT_ROLES), async (req, res) => {
+  try {
+    const hazard = readHazards().find(h => h.id === req.params.id);
+    if (!hazard) return res.status(404).type('html').send(printErrorPage('البلاغ غير موجود أو اتمسح.'));
+    const verifyUrl = `${pdfBaseUrl(req)}/verify/hazard/${encodeURIComponent(hazard.id)}`;
+    const qrDataUrl = await QRCode.toDataURL(verifyUrl, { margin: 1, width: 220 }).catch(() => null);
+    // الصورة من نفس السيرفر فقط (المسار بيتولد من السيرفر نفسه وقت الرفع)
+    const photoAbsUrl = /^\/uploads\/hazards\/[A-Za-z0-9._-]+$/.test(String(hazard.photoUrl || '')) ? hazard.photoUrl : null;
+    sendPrintPage(res, renderPrintDocument(buildHazardPrint(hazard, { qrDataUrl, photoAbsUrl, autoPrint: req.query.autoprint === '1' })));
+  } catch (err) {
+    console.error('[print] hazard failed:', err);
+    res.status(500).type('html').send(printErrorPage('حصل خطأ أثناء تجهيز المستند للطباعة.'));
+  }
+});
+
+// تقرير تجربة الطوارئ — نفس محتوى نموذج Word (SE-03-F1) بشكل المستندات
+// الموحّد، للطباعة المباشرة من المتصفح. نفس صلاحيات تنزيل الـ Word.
+app.get('/print/drill/:id', authenticateTokenFlexible, requireRole(...PDF_EXPORT_ROLES), (req, res) => {
+  try {
+    const drill = readDrills().find(d => d.id === req.params.id && !d.isDeleted);
+    if (!drill) return res.status(404).type('html').send(printErrorPage('التجربة غير موجودة أو اتمسحت.'));
+    sendPrintPage(res, renderPrintDocument(buildDrillPrint(drill, drill.report || defaultDrillReport(), { autoPrint: req.query.autoprint === '1' })));
+  } catch (err) {
+    console.error('[print] drill failed:', err);
+    res.status(500).type('html').send(printErrorPage('حصل خطأ أثناء تجهيز المستند للطباعة.'));
+  }
+});
+
+// ============================================================
+// 📑 التقارير — تقرير السلامة الشامل (طباعة + إرسال بالإيميل)
+// ============================================================
+// تابة "التقارير" عند مسئول السلامة: تقرير نصي كامل عن المصنع أو قسم أو
+// موظف (بالكود) لفترة معيّنة، بيتطبع بشعار السويدي بوليمرز وبيتبعت
+// بالإيميل بضغطة زرار. حسابات المتابعة (المدير التنفيذي/مدير السلامة)
+// بيشوفوه ويبعتوه كمان — ده قراءة بس. (22 سبتمبر 2026)
+const REPORT_ROLES = ['super_admin', 'hse_admin'];
+const REPORT_EMAIL_ROLES = ['super_admin', 'hse_admin', 'hse_director', 'ceo'];
+const REPORT_LOGO_PATH = path.join(__dirname, 'public', 'icons', 'elsewedy-logo-print.png');
+
+function reportQueryFrom(src) {
+  const q = src || {};
+  return {
+    dept: sanitizeStr(q.dept || '', 80),
+    emp: sanitizeStr(q.emp || '', 20),
+    period: sanitizeStr(q.period || '', 20),
+    from: sanitizeStr(q.from || '', 10),
+    to: sanitizeStr(q.to || '', 10),
+  };
+}
+function reportActorName(user) {
+  return (user && (user.fullName || user.name || user.username)) || '';
+}
+
+app.get('/api/reports/options', authenticateToken, requireRole(...REPORT_ROLES), (req, res) => {
+  try {
+    res.json({ departments: reports.listDepartments(chatbotData()), mailConfigured: mailer.isConfigured() });
+  } catch (err) {
+    console.error('[reports] options failed:', err);
+    res.status(500).json({ error: 'تعذّر تحميل خيارات التقرير' });
+  }
+});
+
+app.get('/print/report', authenticateTokenFlexible, requireRole(...REPORT_ROLES), (req, res) => {
+  try {
+    const rep = reports.buildSafetyReport({ data: chatbotData(), query: reportQueryFrom(req.query), generatedBy: reportActorName(req.user) });
+    if (rep.error) return res.status(400).type('html').send(printErrorPage(rep.error));
+    const doc = reports.buildReportPrint(rep, { autoPrint: req.query.autoprint === '1' });
+    // embed=1: جوه معاينة التابة (iframe) — من غير شريط الأزرار
+    if (req.query.embed === '1') doc.forEmail = false;
+    let html = renderPrintDocument(doc);
+    if (req.query.embed === '1') html = html.replace(/<div class="toolbar no-print">[\s\S]*?<\/div>/, '');
+    sendPrintPage(res, html);
+  } catch (err) {
+    console.error('[reports] print failed:', err);
+    res.status(500).type('html').send(printErrorPage('حصل خطأ أثناء تجهيز التقرير.'));
+  }
+});
+
+// حد إرسال: 15 إيميل في الساعة لكل حساب — التقرير بيتبعت يدويًا، والحد
+// بيمنع أي إساءة استخدام لحساب الإيميل بتاع الشركة.
+const reportEmailLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `rpt:${(req.user && (req.user.id || req.user.username)) || ipKeyGenerator(req.ip)}`,
+  message: { error: 'بعت تقارير كتير في ساعة واحدة — استنى شوية وحاول تاني' },
+});
+
+app.post('/api/reports/email', authenticateToken, requireRole(...REPORT_EMAIL_ROLES), reportEmailLimiter, async (req, res) => {
+  try {
+    const raw = String((req.body && req.body.recipients) || '').trim();
+    const recipients = raw.split(/[\s,;،]+/).map(s => s.trim()).filter(Boolean);
+    if (!recipients.length) return res.status(400).json({ error: 'اكتب الإيميل اللي هيتبعتله التقرير' });
+    if (recipients.length > 5) return res.status(400).json({ error: 'أقصى عدد 5 إيميلات في المرة' });
+    const bad = recipients.find(r => r.length > 120 || !EMAIL_RE.test(r));
+    if (bad) return res.status(400).json({ error: `الإيميل ده مش صحيح: ${bad}` });
+    if (!mailer.isConfigured()) {
+      return res.status(503).json({ error: 'إعدادات الإيميل (SMTP) مش متظبطة — اظبطها الأول من شاشة النسخ الاحتياطي', notConfigured: true });
+    }
+
+    const rep = reports.buildSafetyReport({ data: chatbotData(), query: reportQueryFrom(req.body && req.body.query), generatedBy: reportActorName(req.user) });
+    if (rep.error) return res.status(400).json({ error: rep.error });
+
+    // جسم الإيميل: نفس التقرير، والشعار كمرفق مضمّن (cid) عشان Gmail/Outlook
+    // بيحجبوا الصور الـ data: والروابط الخارجية.
+    const htmlBody = renderPrintDocument(reports.buildReportPrint(rep, { forEmail: true, logoSrc: 'cid:elsewedy-logo' }));
+    // نسخة للطباعة كمرفق: الشعار جواها base64 عشان تتفتح لوحدها من غير إنترنت
+    let logoDataUrl = '';
+    try { logoDataUrl = 'data:image/png;base64,' + fs.readFileSync(REPORT_LOGO_PATH).toString('base64'); } catch (e) { /* الشعار اختياري */ }
+    const printable = renderPrintDocument(reports.buildReportPrint(rep, { logoSrc: logoDataUrl || undefined }));
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    const result = await mailer.sendMail({
+      to: recipients.join(', '),
+      subject: `تقرير السلامة والصحة المهنية — ${rep.scope.label} — ${rep.period.label}`,
+      text: reports.reportPlainText(rep),
+      html: htmlBody,
+      attachments: [
+        { filename: 'elsewedy-logo.png', path: REPORT_LOGO_PATH, cid: 'elsewedy-logo' },
+        { filename: `HSE-Report-${stamp}.html`, content: printable, contentType: 'text/html; charset=utf-8' },
+      ],
+    });
+    if (!result.sent) {
+      return res.status(502).json({ error: 'السيرفر ماقدرش يبعت الإيميل — راجع إعدادات SMTP', reason: result.reason });
+    }
+    logAuditEvent({
+      entityType: 'report', entityId: 'safety-report', action: 'email', actor: req.user,
+      note: `إرسال تقرير (${rep.scope.label} — ${rep.period.label}) إلى: ${recipients.join(', ')}`,
+    });
+    res.json({ success: true, sentTo: recipients });
+  } catch (err) {
+    console.error('[reports] email failed:', err);
+    res.status(500).json({ error: 'حصل خطأ أثناء إرسال التقرير' });
+  }
+});
+
 app.get('/verify/hazard/:id', (req, res) => {
   const hazard = readHazards().find(h => h.id === req.params.id);
   if (!hazard) return res.status(404).send(verifyPageHtml({ title: 'بلاغ غير موجود', rows: [], statusLabel: 'غير صالح', statusColor: '#DC2626' }));
-  const statusMap = { open: ['مفتوح', '#D97706'], closed: ['مغلق', '#16A34A'] };
-  const [label, color] = statusMap[hazard.status] || ['—', '#64748B'];
+  const { label, color } = verifyStatus(hazard, hazardStatus(hazard.status));
   res.send(verifyPageHtml({
     title: `بلاغ خطورة ${hazard.id}`,
     statusLabel: label, statusColor: color,
@@ -9894,7 +10255,31 @@ app.use((req, res) => {
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({ error: 'API route not found' });
   }
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  // صفحة/ملف مش موجود: الحالة 404 (مش 200) عشان محركات البحث ما تفهرسش
+  // عناوين وهمية كنسخ من الصفحة الرئيسية، والصور الناقصة تفشل صح — والمستخدم
+  // لسه بيشوف المنصة عادي.
+  if (req.method === 'GET' && req.accepts('html') && !/\.[a-z0-9]{2,5}$/i.test(req.path)) {
+    return res.status(404).type('html').send(renderIndexHtml(req));
+  }
+  res.status(404).type('text/plain; charset=utf-8').send('غير موجود');
+});
+
+// ── معالج الأخطاء العام (22 سبتمبر 2026) ─────────────────────────
+// من غيره Express بيرجّع صفحة HTML فيها الـ stack trace (مسارات الملفات
+// وأسماء الدوال) لأي خطأ — زي JSON بايظ أو طلب أكبر من الحد. دلوقتي الرد
+// رسالة عربي واضحة من غير أي تفاصيل داخلية، والتفاصيل بتروح اللوج بس.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  const status = err.status || err.statusCode || 500;
+  let message = 'حصل خطأ غير متوقع في السيرفر — حاول تاني';
+  if (err.type === 'entity.too.large' || status === 413) message = 'حجم البيانات أكبر من المسموح';
+  else if (err.type === 'entity.parse.failed') message = 'البيانات المبعوتة مش بصيغة صحيحة';
+  else if (status < 500 && err.expose && err.message) message = err.message;
+  if (status >= 500) console.error('[error]', req.method, req.originalUrl, err && err.stack ? err.stack : err);
+  if (res.headersSent) return next(err);
+  res.status(status >= 400 && status < 600 ? status : 500);
+  if (req.path.startsWith('/api/')) return res.json({ error: message });
+  res.type('text/plain; charset=utf-8').send(message);
 });
 
 // ── Start Server ──────────────────────────────────────────────

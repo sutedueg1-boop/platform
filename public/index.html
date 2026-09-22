@@ -19,13 +19,43 @@
     />
     <meta
       name="description"
-      content="منصة إدارة وتتبع الطلبات والسلامة والصحة المهنية - السويدي للبوليمرات"
+      content="منصة السلامة والصحة المهنية والبيئة (HSE) للسويدي للبوليمرات: تصاريح العمل، بلاغات الخطورة، التدريب والتوعية، تجارب الطوارئ، الفحص الشهري والتقارير."
     />
-    <title>HSE Platform - Elsewedy Polymers</title>
-    <link
-      rel="canonical"
-      href="https://elsewedy-polymers-work-permits.up.railway.app/"
-    />
+    <meta name="robots" content="index, follow" />
+    <meta name="application-name" content="HSE Platform" />
+    <meta name="author" content="Elsewedy Polymers — HSE" />
+    <title>منصة السلامة والصحة المهنية | HSE Platform - Elsewedy Polymers</title>
+    <!-- الرابط الرسمي وبيانات المشاركة: السيرفر بيحط عنوان الموقع الحقيقي مكان
+         __SITE_URL__ (من PUBLIC_BASE_URL) — قبل كده الـ canonical كان ثابت على
+         دومين قديم مش هو اللي المنصة شغالة عليه. (22 سبتمبر 2026) -->
+    <link rel="canonical" href="__SITE_URL__/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="HSE Platform — Elsewedy Polymers" />
+    <meta property="og:locale" content="ar_EG" />
+    <meta property="og:url" content="__SITE_URL__/" />
+    <meta property="og:title" content="منصة السلامة والصحة المهنية — السويدي للبوليمرات" />
+    <meta property="og:description" content="تصاريح العمل، بلاغات الخطورة، التدريب، تجارب الطوارئ والتقارير — في مكان واحد." />
+    <meta property="og:image" content="__SITE_URL__/icons/icon-512.png" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:image:alt" content="شعار منصة السلامة — السويدي للبوليمرات" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="منصة السلامة والصحة المهنية — السويدي للبوليمرات" />
+    <meta name="twitter:description" content="تصاريح العمل، بلاغات الخطورة، التدريب، تجارب الطوارئ والتقارير." />
+    <meta name="twitter:image" content="__SITE_URL__/icons/icon-512.png" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "HSE Platform — Elsewedy Polymers",
+        "alternateName": "منصة السلامة والصحة المهنية — السويدي للبوليمرات",
+        "url": "__SITE_URL__/",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Web",
+        "inLanguage": "ar",
+        "publisher": { "@type": "Organization", "name": "Elsewedy Polymers" }
+      }
+    </script>
     <link rel="manifest" href="manifest.json" />
     <link
       rel="icon"
@@ -52,7 +82,7 @@
         rel="stylesheet"
       />
     </noscript>
-    <link rel="stylesheet" href="style.min.css?v=2.46.0" />
+    <link rel="stylesheet" href="style.min.css?v=2.47.0" />
     <!-- PERF: xlsx.js (~900KB) and chart.js are only ever used AFTER login
          (dashboard charts, Excel export/import buttons) — never on this
          initial login screen. Loading them as normal <script> tags (even
@@ -540,6 +570,13 @@
           onclick="switchTab('auditlog')"
           style="display: none"
         ><span data-i18n="tabAuditLog">🛡️ سجل التدقيق</span></div>
+        <!-- 📑 REPORTS TAB — تقرير نصي كامل للطباعة والإرسال بالبريد (hse_admin/super_admin) -->
+        <div
+          class="tab"
+          id="tabReports"
+          onclick="switchTab('reports')"
+          style="display: none"
+        ><span data-i18n="tabReports">📑 التقارير</span></div>
         <!-- 👔 EXECUTIVE TAB — حسابات المتابعة (المدير التنفيذي ومدير السلامة) -->
         <div
           class="tab"
@@ -571,6 +608,11 @@
       <!-- 🛡️ AUDIT LOG VIEW (سجل التدقيق) — hse_admin/super_admin only -->
       <div id="viewAuditLog" style="display: none; padding: 12px">
         <div id="auditLogContent"></div>
+      </div>
+
+      <!-- 📑 REPORTS VIEW (التقارير) — hse_admin/super_admin + حسابات المتابعة -->
+      <div id="viewReports" style="display: none; padding: 12px">
+        <div id="reportsContent"></div>
       </div>
 
       <!-- WORKER FORM VIEW -->
@@ -2593,6 +2635,6 @@
         </button>
       </form>
     </section>
-    <script src="app.min.js?v=99.9.48" defer></script>
+    <script src="app.min.js?v=99.9.49" defer></script>
   </body>
 </html>

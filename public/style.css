@@ -6638,3 +6638,83 @@ body[data-theme="dark"] .audit-item-note { background: rgba(255,255,255,.04); }
   margin-top: 6px;
   color: var(--muted);
 }
+/* ============================================================
+   📑 التقارير — تقرير السلامة الشامل (22 سبتمبر 2026)
+   ============================================================ */
+.rep-intro {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.8;
+}
+.rep-filters .adv-filter-field select:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.rep-hint {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.rep-hint.warn { color: var(--danger); font-weight: 700; }
+.rep-mail { margin: 0 0 20px; }
+.rep-mail .rep-hint { margin: 10px 0 0; }
+.rep-mail-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: stretch;
+}
+.rep-mail-row input {
+  flex: 1 1 260px;
+  min-width: 0;
+  border-radius: 9px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--paper-line);
+  background: var(--paper);
+  color: var(--text-color);
+  font-family: inherit;
+  font-size: 14px;
+}
+.rep-mail-row input:focus {
+  outline: none;
+  border-color: var(--brand-primary);
+  box-shadow: var(--focus-ring);
+}
+.rep-send-btn {
+  flex: 0 0 auto;
+  font-weight: 800;
+  letter-spacing: .6px;
+  white-space: nowrap;
+}
+.rep-send-btn:disabled { opacity: .6; cursor: progress; }
+.rep-preview {
+  background: #D9DCE1;
+  border-radius: 14px;
+  padding: 10px;
+  min-height: 160px;
+}
+body[data-theme="dark"] .rep-preview { background: #262626; }
+.rep-preview > .loading,
+.rep-preview > .empty { background: var(--surface); border-radius: 10px; }
+.rep-frame {
+  display: block;
+  width: 100%;
+  min-height: 480px;
+  border: 0;
+  border-radius: 8px;
+  background: #E5E7EB;
+}
+@media (max-width: 600px) {
+  .rep-preview { padding: 4px; border-radius: 10px; }
+  .rep-send-btn { flex: 1 1 100%; }
+}
+
+/* زرار "عرض المزيد" تحت قايمة التصاريح (بتترسم 50 في المرة) */
+.pm-more {
+  display: flex;
+  justify-content: center;
+  padding: 14px 0 22px;
+}
+.pm-more .btn { min-width: 220px; }
